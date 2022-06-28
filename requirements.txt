@@ -1,0 +1,4 @@
+mujoco==2.2.0
+dm-control==1.0.3.post1
+Pillow
+matplotlib

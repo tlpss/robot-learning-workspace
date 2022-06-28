@@ -1,2 +1,1 @@
-# block-puzzle-reward-learning
-Reward Learning from Human Observations for learning to solve block puzzles with RL
+## Solving block puzzles with RL using learned rewards from human observations.
