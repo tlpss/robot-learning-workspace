@@ -21,11 +21,11 @@
 
     to create the file:
     1. install the UR drivers for ROS2 galactic and run `ros2 launch ur_description view_ur.launch.py ur_type:=ur3e`.
-     see the airo-ros repo for instructions on how to set up ROS.
+     see the airo-ros repo for instructions on how to set up ROS. (Note that for "normal" xacro's we would just run the xacro processor, but due the numerous params etc this was not convenient here)
     2. get the resulting URDF description from the robot_state_publisher (in a separate terminal) `ros2 param get /robot_state_publisher robot_description > ur3e.urdf`
     3. remove the <ros_control> part from the URDF
     4. change the mesh paths: copy the meshes for the UR3e to a folder and change the relative paths from this file to the meshes.
-    5. add colors (inspired by Google Ravens)
+    5. add colors (inspired by Google Ravens) (bullet cannot take the colors in .obj or .dae files ... see https://github.com/bulletphysics/bullet3/issues/1934)
 
     -->
 

@@ -1,3 +1,5 @@
 Pillow
 matplotlib
 pybullet==3.2.5
+gym
+numpy

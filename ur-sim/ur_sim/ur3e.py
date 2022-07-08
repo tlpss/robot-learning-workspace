@@ -1,5 +1,7 @@
 from typing import List, Tuple
 
+import matplotlib.pyplot as plt
+import pybullet
 import pybullet as p
 import pybullet_data
 from ur_sim.assets.path import get_asset_root_folder
@@ -12,14 +14,13 @@ class UR3e:
     """
     Class for creating and interacting with a UR3e robot in PyBullet.
     """
-    def __init__(self, start_pose = None):
+    def __init__(self, robot_base_position = None):
         self.homej = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi
-        self.robot_id_base_pose = start_pose
-        if self.robot_id_base_pose is None:
-            self.robot_id_base_position = [0,0,0]
-            self.robot_id_base_orientation = p.getQuaternionFromEuler([0,0,0])
+        if robot_base_position is None:
+            self.robot_base_position = [0, 0, 0]
         else:
-            raise NotImplementedError
+            assert len(robot_base_position) == 3
+            self.robot_base_position = robot_base_position
 
         self.robot_id = None
         self.joint_ids = None
@@ -27,11 +28,10 @@ class UR3e:
         self.reset()
 
     def reset(self):
-        self.robot_id = p.loadURDF(str(asset_path / "ur3e" / "ur3e.urdf"),self.robot_id_base_position, self.robot_id_base_orientation)
+        self.robot_id = p.loadURDF(str(asset_path / "ur3e" / "ur3e.urdf"), self.robot_base_position, flags=pybullet.URDF_USE_SELF_COLLISION)
 
         # Get revolute joint indices of robot_id (skip fixed joints).
         n_joints = p.getNumJoints(self.robot_id)
-        print(p.getLinkState(self.robot_id, 9))
         joints = [p.getJointInfo(self.robot_id, i) for i in range(n_joints)]
         self.joint_ids = [j[0] for j in joints if j[2] == p.JOINT_REVOLUTE]
 
@@ -56,7 +56,7 @@ class UR3e:
         """
         return [p.getJointState(self.robot_id, i)[0] for i in self.joint_ids]
 
-    def movej(self, targj: List, speed=0.01, timeout=5) -> bool:
+    def movej(self, targj: List, speed=0.01, timeout=10) -> bool:
         """Move UR5 to target joint configuration.
         adapted from https://github.com/google-research/ravens/blob/d11b3e6d35be0bd9811cfb5c222695ebaf17d28a/ravens/environments/environment.py#L351
 
@@ -109,17 +109,39 @@ class UR3e:
         return joints
 
 
+
+
 if __name__ == "__main__":
+    """
+    simple script to move the UR3e 
+    """
     physicsClient = p.connect(p.GUI)#or p.DIRECT for non-graphical version
     p.setAdditionalSearchPath(pybullet_data.getDataPath()) #optionally
     p.setGravity(0,0,-10)
-    planeId = p.loadURDF("plane.urdf")
 
+    target = p.getDebugVisualizerCamera()[11]
+    p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
+
+    p.resetDebugVisualizerCamera(
+        cameraDistance=1.8,
+        cameraYaw=0,
+        cameraPitch=-45,
+        cameraTargetPosition=target)
+
+    planeId = p.loadURDF("plane.urdf",[0,0,-1.0])
+    tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"),[0,-0.3,-0.01])
     robot = UR3e()
     time.sleep(2.0)
     robot.movep(([0.2,-0.2,0.2],p.getQuaternionFromEuler([np.pi, 0,0])))
-    time.sleep(2.0)
-    robot.movep(([-0.2,0.2,0.2],p.getQuaternionFromEuler([np.pi, 0,0])))
-    time.sleep(2.0)
+    # robot.movep(([-0.2,0.2,0.2],p.getQuaternionFromEuler([np.pi, 0,0])))
+    # time.sleep(2.0)
+    robot.movep(([-0.0,-0.23,0.2],p.getQuaternionFromEuler([np.pi, 0,0])))
+    robot.movep(([-0.0,-0.23,0.1],p.getQuaternionFromEuler([np.pi, 0,0])))
+    robot.movep(([-0.0,-0.23,0.01],p.getQuaternionFromEuler([np.pi, 0,0])))
+
+    time.sleep(100.0)
     p.disconnect()
+
+
+
 
