@@ -14,7 +14,8 @@ class UR3e:
     """
     Class for creating and interacting with a UR3e robot in PyBullet.
     """
-    def __init__(self, robot_base_position = None):
+    def __init__(self, robot_base_position = None, eef_start_pose = None, simulate_real_time = False):
+        self.simulate_real_time = simulate_real_time
         self.homej = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi
         if robot_base_position is None:
             self.robot_base_position = [0, 0, 0]
@@ -25,50 +26,60 @@ class UR3e:
         self.robot_id = None
         self.joint_ids = None
         self.eef_id = 9  # manually determined
-        self.reset()
 
-    def reset(self):
-        self.robot_id = p.loadURDF(str(asset_path / "ur3e" / "ur3e.urdf"), self.robot_base_position, flags=pybullet.URDF_USE_SELF_COLLISION)
+        self.reset(eef_start_pose)
+
+
+    def reset(self, pose=None):
+        self.robot_id = p.loadURDF(str(asset_path / "ur3e" / "ur3e.urdf"), self.robot_base_position, flags=pybullet.URDF_USE_INERTIA_FROM_FILE)
 
         # Get revolute joint indices of robot_id (skip fixed joints).
         n_joints = p.getNumJoints(self.robot_id)
         joints = [p.getJointInfo(self.robot_id, i) for i in range(n_joints)]
         self.joint_ids = [j[0] for j in joints if j[2] == p.JOINT_REVOLUTE]
 
+
         # Move robot_id to home joint configuration.
         for i in range(len(self.joint_ids)):
             p.resetJointState(self.robot_id, self.joint_ids[i], self.homej[i])
 
-    def get_eef_pose(self) -> Tuple[List,List]:
+        if pose is not None:
+            joint_config = self.solve_ik(pose)
+            # Move robot to target pose starting from the home joint configuration.
+            for i in range(len(self.joint_ids)):
+                p.resetJointState(self.robot_id, self.joint_ids[i], joint_config[i])
+
+    def get_current_eef_target_pose(self) -> np.ndarray:
+        pass
+
+    def get_eef_pose(self) -> np.ndarray:
         """
 
-        :return: Position [m], Orientation [Quaternion, radians]
+        :return: 7D pose: Position [m], Orientation [Quaternion, radians]
         """
         link_info = p.getLinkState(self.robot_id, self.eef_id,)
         position = link_info[0]
         orientation = link_info[1]
-        return position, orientation
+        return np.array(position + orientation)
 
-    def get_joint_configuration(self) -> List:
+    def get_joint_configuration(self) -> np.ndarray:
         """
 
         :return: 6D joint configuration in radians
         """
-        return [p.getJointState(self.robot_id, i)[0] for i in self.joint_ids]
+        return np.array([p.getJointState(self.robot_id, i)[0] for i in self.joint_ids])
 
-    def movej(self, targj: List, speed=0.01, timeout=10) -> bool:
+    def movej(self, targj: np.ndarray, speed=0.05, max_steps:int = 100) -> bool:
         """Move UR5 to target joint configuration.
         adapted from https://github.com/google-research/ravens/blob/d11b3e6d35be0bd9811cfb5c222695ebaf17d28a/ravens/environments/environment.py#L351
 
-        :param targj: A 6D list with target joint configuration
+        :param targj: A 6D np.ndarray with target joint configuration
         :param speed: max joint velocity
         :param timeout: max execution time for the robot to get there
         :return: True if the robot was able to move to the target joint configuration
         """
-        t0 = time.time()
-        while (time.time() - t0) < timeout:
+        for step in range(max_steps):
             currj = self.get_joint_configuration()
-            currj = np.array(currj)
             diffj = targj - currj
             if all(np.abs(diffj) < 1e-2):
                 return True
@@ -86,22 +97,39 @@ class UR3e:
                 targetPositions=stepj,
                 positionGains=gains)
             p.stepSimulation()
-            time.sleep(1.0/240)
-        print(f'Warning: movej exceeded {timeout} second timeout. Skipping.')
+            if self.simulate_real_time:
+                time.sleep(1.0/240)
+        print(f'Warning: movej exceeded {max_steps} simulation steps. Skipping.')
         return False
 
-    def movep(self, pose, speed=0.01):
-        """Move UR5 to target end effector pose."""
-        targj = self.solve_ik(pose)
-        return self.movej(targj, speed)
+    def movep(self, pose: np.ndarray, speed=0.05, max_steps = 100) -> bool:
+        """Move UR3e to target end effector pose.
 
-    def solve_ik(self, pose):
-        """Calculate joint configuration with inverse kinematics."""
+        :param pose: a 7D pose - position [meters] + orientation [Quaternion, radians]
+        """
+        targj = self.solve_ik(pose)
+        return self.movej(targj, speed,max_steps)
+
+    def solve_ik(self, pose: np.ndarray) -> np.ndarray:
+        """Calculate joint configuration with inverse kinematics.
+
+        :param pose: a 7D pose - position [meters] + orientation [Quaternion, radians]
+
+        :return a 6D joint configuration
+        """
         joints = p.calculateInverseKinematics(
             bodyUniqueId=self.robot_id,
             endEffectorLinkIndex=self.eef_id,
-            targetPosition=pose[0],
-            targetOrientation=pose[1],
+            targetPosition=pose[0:3],
+            targetOrientation=pose[3:7],
+            # tuned these params to avoid cray IK solutions.. especially shoulder,elbow and wrist 3 are important!
+            # note that these limit the workspace of the robot!
+            # with a decent planner such constraints are not required nor desirable.
+
+            lowerLimits=[- 5/4*np.pi, -np.pi, 0, -0.95*np.pi, -np.pi, -2*np.pi],
+            upperLimits=[2*np.pi/4, 0, np.pi, -0.05*np.pi, 0, 2*np.pi],
+            jointRanges=[1.5*np.pi, np.pi, np.pi, 0.9*np.pi, np.pi, 4*np.pi],
+            restPoses=np.float32(self.homej).tolist(),
             maxNumIterations=100,
             residualThreshold=1e-5)
         joints = np.float32(joints)
@@ -117,7 +145,7 @@ if __name__ == "__main__":
     """
     physicsClient = p.connect(p.GUI)#or p.DIRECT for non-graphical version
     p.setAdditionalSearchPath(pybullet_data.getDataPath()) #optionally
-    p.setGravity(0,0,-10)
+    p.setGravity(0,0,-9.81)
 
     target = p.getDebugVisualizerCamera()[11]
     p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
@@ -130,16 +158,34 @@ if __name__ == "__main__":
 
     planeId = p.loadURDF("plane.urdf",[0,0,-1.0])
     tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"),[0,-0.3,-0.01])
-    robot = UR3e()
+    robot = UR3e(simulate_real_time=True)
     time.sleep(2.0)
-    robot.movep(([0.2,-0.2,0.2],p.getQuaternionFromEuler([np.pi, 0,0])))
-    # robot.movep(([-0.2,0.2,0.2],p.getQuaternionFromEuler([np.pi, 0,0])))
-    # time.sleep(2.0)
-    robot.movep(([-0.0,-0.23,0.2],p.getQuaternionFromEuler([np.pi, 0,0])))
-    robot.movep(([-0.0,-0.23,0.1],p.getQuaternionFromEuler([np.pi, 0,0])))
-    robot.movep(([-0.0,-0.23,0.01],p.getQuaternionFromEuler([np.pi, 0,0])))
 
-    time.sleep(100.0)
+    pose = [0.4, -0.0, 0.1]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    pose = [0.3, -0.4, 0.1]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    pose = [-0.2, -0.4, 0.1]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    pose = [-0.2, -0.23, 0.2]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    pose = [-0.4, -0.0, 0.2]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    pose = [-0.0, -0.25, 0.01]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    time.sleep(10.0)
     p.disconnect()
 
 
