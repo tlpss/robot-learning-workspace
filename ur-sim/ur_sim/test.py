@@ -12,7 +12,7 @@ if __name__ == "__main__":
     planeId = p.loadURDF("plane.urdf")
     startPos = [0,0,0.5]
     startOrientation = p.getQuaternionFromEuler([0,0,0.0])
-    urId = p.loadURDF("assets/cylinder/visual_cylinder.urdf",startPos, startOrientation)
+    urId = p.loadURDF("assets/ur3e/ur3e.urdf",startPos, startOrientation)
     print(p.getNumJoints(urId))
     #set the center of mass frame (loadURDF sets base link frame) startPos/Ornp.resetBasePositionAndOrientation(boxId, startPos, startOrientation)
     for i in range (10000):

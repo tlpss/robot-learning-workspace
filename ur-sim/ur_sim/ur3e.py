@@ -12,7 +12,8 @@ asset_path = get_asset_root_folder()
 
 class UR3e:
     """
-    Class for creating and interacting with a UR3e robot in PyBullet.
+    Synchronous Interface for a simulated UR3e robot in PyBullet.
+    Uses the (limited) inverse kinematics of Bullet.
     """
     def __init__(self, robot_base_position = None, eef_start_pose = None, simulate_real_time = False):
         self.simulate_real_time = simulate_real_time
@@ -67,7 +68,7 @@ class UR3e:
         """
         return np.array([p.getJointState(self.robot_id, i)[0] for i in self.joint_ids])
 
-    def movej(self, targj: np.ndarray, speed=0.05, max_steps:int = 100) -> bool:
+    def movej(self, targj: np.ndarray, speed=1.0, max_steps:int = 100) -> bool:
         """Move UR5 to target joint configuration.
         adapted from https://github.com/google-research/ravens/blob/d11b3e6d35be0bd9811cfb5c222695ebaf17d28a/ravens/environments/environment.py#L351
 
@@ -84,20 +85,26 @@ class UR3e:
 
             # Move with constant velocity by setting target joint configuration
             # to an intermediate configuration at each step
+            # This also somehow makes motions more linear in the EEF space #todo: figure out why..
+            # but it was convenient for motion primitives so for now I leave it like this.
             norm = np.linalg.norm(diffj,ord=1)
             v = diffj / norm if norm > 0 else 0
-            stepj = currj + v * speed
+            stepj = currj + v * speed/100
             gains = np.ones(len(self.joint_ids))
             for id,joint in enumerate(self.joint_ids):
+                # set individual to allow for setting the max Velocity
                 p.setJointMotorControl2(
                     bodyIndex=self.robot_id,
                     jointIndex=self.joint_ids[id],
                     controlMode=p.POSITION_CONTROL,
                     targetPosition=stepj[id],
+                    #velocityGain=0.5,
                     positionGain=gains[id],
+                   # maxVelocity=speed,
+                   force=100 # this is way too high for the UR3e, but makes the simulation more stable..
                 )
 
-            #self._compensate_gravity()
+            self._compensate_gravity()
 
             p.stepSimulation()
             if self.simulate_real_time:
@@ -105,13 +112,19 @@ class UR3e:
         print(f'Warning: movej exceeded {max_steps} simulation steps. Skipping.')
         return False
 
-    def movep(self, pose: np.ndarray, speed=0.02, max_steps = 200) -> bool:
+    def movep(self, pose: np.ndarray, speed=1.5, max_steps = 200) -> bool:
         """Move UR3e to target end effector pose.
 
         :param pose: a 7D pose - position [meters] + orientation [Quaternion, radians]
         """
+
         targj = self.solve_ik(pose)
         return self.movej(targj, speed,max_steps)
+
+    def movep_linear(self,pose:np.ndarray, speed=1.5):
+        #todo: linear EEF motions
+        raise NotImplementedError
+
 
     def solve_ik(self, pose: np.ndarray) -> np.ndarray:
         """Calculate joint configuration with inverse kinematics.
@@ -146,6 +159,7 @@ class UR3e:
 
 
 
+
 if __name__ == "__main__":
     """
     simple script to move the UR3e 
@@ -167,7 +181,8 @@ if __name__ == "__main__":
     tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"),[0,-0.3,-0.01])
     robot = UR3e(simulate_real_time=True)
     time.sleep(2.0)
-
+    for _ in range(200):
+        p.stepSimulation()
     pose = [0.4, -0.0, 0.1]
     pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
     pose = np.array(pose)
