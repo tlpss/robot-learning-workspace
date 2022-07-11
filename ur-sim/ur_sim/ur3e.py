@@ -49,15 +49,13 @@ class UR3e:
             for i in range(len(self.joint_ids)):
                 p.resetJointState(self.robot_id, self.joint_ids[i], joint_config[i])
 
-    def get_current_eef_target_pose(self) -> np.ndarray:
-        pass
 
     def get_eef_pose(self) -> np.ndarray:
         """
 
         :return: 7D pose: Position [m], Orientation [Quaternion, radians]
         """
-        link_info = p.getLinkState(self.robot_id, self.eef_id,)
+        link_info = p.getLinkState(self.robot_id, self.eef_id)
         position = link_info[0]
         orientation = link_info[1]
         return np.array(position + orientation)
@@ -90,19 +88,24 @@ class UR3e:
             v = diffj / norm if norm > 0 else 0
             stepj = currj + v * speed
             gains = np.ones(len(self.joint_ids))
-            p.setJointMotorControlArray(
-                bodyIndex=self.robot_id,
-                jointIndices=self.joint_ids,
-                controlMode=p.POSITION_CONTROL,
-                targetPositions=stepj,
-                positionGains=gains)
+            for id,joint in enumerate(self.joint_ids):
+                p.setJointMotorControl2(
+                    bodyIndex=self.robot_id,
+                    jointIndex=self.joint_ids[id],
+                    controlMode=p.POSITION_CONTROL,
+                    targetPosition=stepj[id],
+                    positionGain=gains[id],
+                )
+
+            #self._compensate_gravity()
+
             p.stepSimulation()
             if self.simulate_real_time:
                 time.sleep(1.0/240)
         print(f'Warning: movej exceeded {max_steps} simulation steps. Skipping.')
         return False
 
-    def movep(self, pose: np.ndarray, speed=0.05, max_steps = 100) -> bool:
+    def movep(self, pose: np.ndarray, speed=0.02, max_steps = 200) -> bool:
         """Move UR3e to target end effector pose.
 
         :param pose: a 7D pose - position [meters] + orientation [Quaternion, radians]
@@ -136,6 +139,10 @@ class UR3e:
         joints[2:] = (joints[2:] + np.pi) % (2 * np.pi) - np.pi
         return joints
 
+    def _compensate_gravity(self):
+        link_masses = [2.0,2.0,3.42,1.26,0.8,0.8,0.35]
+        for id, mass in zip(self.joint_ids,link_masses):
+            p.applyExternalForce(self.robot_id,id,forceObj=[0,0,9.81*mass],posObj =[0,0,0],flags=p.LINK_FRAME)
 
 
 
