@@ -46,7 +46,7 @@
             <geometry>
                 <mesh filename="visual/base.dae"/>
             </geometry>
-            <material name="LightGrey"/>
+            <material name="DarkGrey"/>
 
         </visual>
         <collision>
