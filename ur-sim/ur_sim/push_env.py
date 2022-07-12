@@ -1,7 +1,7 @@
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Any
 
 import gym
-from gym.core import ObsType
+import matplotlib.pyplot as plt
 
 from ur_sim.assets.path import get_asset_root_folder
 from ur_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
@@ -12,7 +12,7 @@ import pybullet_data
 import numpy as np
 
 import logging
-
+from PIL import Image
 
 class UR3ePush(gym.Env):
     """
@@ -25,7 +25,7 @@ class UR3ePush(gym.Env):
     # Object Properties
     goal_l2_margin = 0.05
     primitive_max_push_distance = 0.15
-    primitive_robot_eef_z = 0.01
+    primitive_robot_eef_z = 0.02
     primitive_home_pose = [-0.13, -0.21, 0.30]
 
     object_radius = 0.05
@@ -35,6 +35,8 @@ class UR3ePush(gym.Env):
     robot_motion_margin = 0.02  # margin added to the start pose of the linear trajectory to avoid collisions with the object while moving down
 
     max_eef_delta = 0.05 # max change in 1 action per dimension
+
+    image_dimensions = (64,64)
 
     eef_space_bounds = (-0.35,0.2,-0.48,-0.22,0.01,0.15) # (min_x,max_x,min_y,max_y,min_z,max_z)[m]
 
@@ -55,12 +57,31 @@ class UR3ePush(gym.Env):
         # keep target pose, to avoid drift due to simulator instabilities.
         self.initial_eef_pose = np.array([0.1, -0.3, 0.12, 1.0, 0, 0, 0]) # default EEF pose
         self.target_position = [-0.05,-0.35,0.001]
-        self.initial_object_position = [0.1,-0.33,0.06]
-        #todo: action space
-        #todo: observation space
+        self.initial_object_position = [0.1,-0.33,0.01]
+
+        if self.use_push_primitive:
+            self.action_space = gym.spaces.Box(low=np.array([0.0, 0.0]),high=np.array([2*np.pi, UR3ePush.primitive_max_push_distance]))
+        else:
+            self.action_space = gym.spaces.Box(-UR3ePush.max_eef_delta, UR3ePush.max_eef_delta,(3,))
+
+        if self.use_state_observation:
+            if self.use_push_primitive:
+                self.observation_space = gym.spaces.Box(-1.0,1.0,(4,))
+            else:
+                self.observation_space = gym.spaces.Box(-1.0,1.0,(7,))
+        else:
+            self.observation_space = gym.spaces.Box(0,255,UR3ePush.image_dimensions)
+            pass
+
+        # don't set this max duration too low! when it was 10, the policies got stuck in local optima,
+        # as there were many invalid actions among those 10 steps the number of "real" steps was too low..
+
+        self.max_episode_duration = 20 if self.use_push_primitive else 100
+        self.current_episode_duration = 0
         self.reset()
 
-    def reset(self) -> Union[ObsType, tuple[ObsType, dict]]:
+    def reset(self):
+        self.current_episode_duration = 0
         if p.isConnected():
             p.resetSimulation()
         else:
@@ -82,13 +103,16 @@ class UR3ePush(gym.Env):
         disable_debug_rendering() # will do nothing if not enabled.
 
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -1.0])
-        self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
+        self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         if self.use_push_primitive:
             self.initial_eef_pose = UR3ePush.primitive_home_pose
-        self.robot = UR3e(eef_start_pose=self.initial_eef_pose, simulate_real_time=self.simulate_real_time)
-
+        #todo: surpress pybullet output during loading of URDFs.. (see pybullet_planning repo)
+        if self.robot is None:
+            self.robot = UR3e(eef_start_pose=self.initial_eef_pose, simulate_real_time=self.simulate_real_time)
+        else:
+            self.robot.reset(self.initial_eef_pose)
         self.initial_object_position[:2] = self.get_random_object_position(np.array(self.target_position[:2]))
-        self.disc_id = p.loadURDF(str(self.asset_path / "cylinder"/"1:2cylinder.urdf"),self.initial_object_position,globalScaling=0.1,flags=p.URDF_USE_INERTIA_FROM_FILE)
+        self.disc_id = p.loadURDF(str(self.asset_path / "cylinder"/"1:2cylinder.urdf"),self.initial_object_position,globalScaling=0.1)
         self.target_id = p.loadURDF(str(self.asset_path / "cylinder"/"1:2visual_cylinder.urdf"),self.target_position,globalScaling=0.1)
 
         p.changeVisualShape(self.target_id,-1, rgbaColor=(0.9,0.3,0.3,0.6))
@@ -96,6 +120,8 @@ class UR3ePush(gym.Env):
         if self.simulate_real_time:
             enable_debug_rendering()
 
+        for _ in range(100):
+            p.stepSimulation()
         return self.get_current_observation()
 
     def _get_robot_eef_position(self) -> List:
@@ -109,13 +135,21 @@ class UR3ePush(gym.Env):
     def get_current_observation(self):
         # cropped rgb?
         if self.use_state_observation:
-            obs = self._get_robot_eef_position()
+            if self.use_push_primitive:
+                obs = []
+            else:
+                obs = self._get_robot_eef_position()
             obs.extend(self._get_object_position_on_plane())
             obs.extend(self._get_target_position_on_plane())
-
+            return obs
         else:
             rgb,depth,_ = self.camera.get_image()
-            return rgb,depth
+            rgb = Image.fromarray(rgb)
+            rgb = rgb.crop((400,0,1400,1000))
+            rgb = rgb.resize(UR3ePush.image_dimensions)
+            rgb = np.array(rgb)
+
+            return rgb
 
     def _reward(self):
         # get distance between disc and target position
@@ -124,16 +158,20 @@ class UR3ePush(gym.Env):
         object_position = np.array(self._get_object_position_on_plane())
         target_position = np.array(self._get_target_position_on_plane())
 
-        return - np.linalg.norm(object_position - target_position)
+        reward = - np.linalg.norm(object_position - target_position)
+        reward += 10 * (np.linalg.norm(object_position - target_position) < UR3ePush.goal_l2_margin)  # greatly improves learning efficiency
+        return reward
 
     def _done(self):
         object_position = np.array(self._get_object_position_on_plane())
         target_position = np.array(self._get_target_position_on_plane())
 
-        return np.linalg.norm(object_position - target_position) < UR3ePush.goal_l2_margin
+        done = np.linalg.norm(object_position - target_position) < UR3ePush.goal_l2_margin
+        done = done or not self.position_is_in_object_space(object_position)
+        done = done or not self.current_episode_duration < self.max_episode_duration
+        return done
 
-    def step(self, action: np.ndarray) -> Tuple[ObsType, float, bool, dict]:
-
+    def step(self, action: np.ndarray) -> Tuple[Any, float, bool, dict]:
         # apply action
         if self.use_push_primitive:
             angle, distance = action
@@ -155,6 +193,7 @@ class UR3ePush(gym.Env):
         # do one additional simulation step to assure that even without robot movement the physics are updated.
         p.stepSimulation()
 
+        self.current_episode_duration += 1  # must be after done calculation
         return new_obs, reward, done, {}
 
     def render(self, mode="human"):
@@ -202,26 +241,26 @@ class UR3ePush(gym.Env):
             return False
 
         # move to start pose
-        self._move_robot(np.array([robot_start_point[0], robot_start_point[1], UR3ePush.primitive_robot_eef_z + 0.05]))
+        self._move_robot(np.array([robot_start_point[0], robot_start_point[1], UR3ePush.primitive_robot_eef_z + 0.03]))
         # execute
-        self._move_robot(np.array([robot_start_point[0], robot_start_point[1], UR3ePush.primitive_robot_eef_z]))
-        self._move_robot(np.array([robot_end_point[0], robot_end_point[1], UR3ePush.primitive_robot_eef_z]))
+        self._move_robot(np.array([robot_start_point[0], robot_start_point[1], UR3ePush.primitive_robot_eef_z]),speed = 0.001)
+        self._move_robot(np.array([robot_end_point[0], robot_end_point[1], UR3ePush.primitive_robot_eef_z]),speed=0.001)
 
         # move back to home pose
-        self._move_robot(np.array([robot_end_point[0], robot_end_point[1], UR3ePush.primitive_robot_eef_z + 0.05]))
+        self._move_robot(np.array([robot_end_point[0], robot_end_point[1], UR3ePush.primitive_robot_eef_z + 0.07]))
         self._move_robot(np.array([UR3ePush.primitive_home_pose[0], UR3ePush.primitive_home_pose[1], UR3ePush.primitive_home_pose[2]]))
         return True
 
-    def _move_robot(self,position:np.array):
+    def _move_robot(self,position:np.array, speed = 0.01):
 
         eef_target_position = np.zeros(7)
-        eef_target_position[4] = 1.0  # quaternion top-down eef orientation
+        eef_target_position[3] = 1.0  # quaternion top-down eef orientation
 
         eef_target_position[0:3] = position
         eef_target_position = self._clip_target_position(eef_target_position)
         logging.debug(f"target EEF pose = {eef_target_position.tolist()[:3]}")
 
-        self.robot.movep(eef_target_position)
+        self.robot.movep(eef_target_position,speed=speed)
 
     def calculate_optimal_primitive(self):
         current_position = self._get_object_position_on_plane()
@@ -274,12 +313,12 @@ class UR3ePush(gym.Env):
         """
         while True:
             x = np.random.random() - 0.5
-            y = np.random.random() * 0.25 - 0.45
+            y = np.random.random() * 0.5 - 0.5
             position = np.array([x, y])
             logging.debug(f"proposed object reset {position}")
             if UR3ePush._position_is_in_workspace(
                 position,
-                margin=1.1
+                margin=1.01
                 * (UR3ePush.object_radius + UR3ePush.robot_flange_radius + UR3ePush.robot_motion_margin),
             ) and not np.linalg.norm(position-goal_position) < UR3ePush.goal_l2_margin:
                 return position
@@ -287,13 +326,16 @@ class UR3ePush(gym.Env):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
-    env = UR3ePush(real_time=True,push_primitive=True)
+    env = UR3ePush(real_time=True,push_primitive=True, state_observation=False)
     done = True
     while True:
         if done:
             obs = env.reset()
         angle,distance = env.calculate_optimal_primitive()
+        # angle = np.random.random(1).item() * 2 * np.pi
+        # distance = np.random.random(1).item() * 0.2
         obs, reward, done, _ = env.step(np.array([angle,distance]))
+        print(obs.shape)
         print(done)
         # env.render()
 
