@@ -9,6 +9,7 @@ import numpy as np
 import time
 asset_path = get_asset_root_folder()
 
+from ur_ikfast.ur_ikfast import ur_kinematics
 
 class UR3e:
     """
@@ -27,6 +28,8 @@ class UR3e:
         self.robot_id = None
         self.joint_ids = None
         self.eef_id = 9  # manually determined
+
+        self.ikfast_ur3e_solver = ur_kinematics.URKinematics("ur3e")
 
         self.reset(eef_start_pose)
 
@@ -68,7 +71,7 @@ class UR3e:
         """
         return np.array([p.getJointState(self.robot_id, i)[0] for i in self.joint_ids])
 
-    def movej(self, targj: np.ndarray, speed=1.0, max_steps:int = 100) -> bool:
+    def movej(self, targj: np.ndarray, speed=0.01, max_steps:int = 100) -> bool:
         """Move UR5 to target joint configuration.
         adapted from https://github.com/google-research/ravens/blob/d11b3e6d35be0bd9811cfb5c222695ebaf17d28a/ravens/environments/environment.py#L351
 
@@ -86,11 +89,9 @@ class UR3e:
             # Move with constant velocity by setting target joint configuration
             # to an intermediate configuration at each step
             # This also somehow makes motions more linear in the EEF space #todo: figure out why..
-            # but it was convenient for motion primitives so for now I leave it like this.
-            norm = np.linalg.norm(diffj,ord=1)
+            norm = np.linalg.norm(diffj)
             v = diffj / norm if norm > 0 else 0
-            stepj = currj + v * speed/100
-            gains = np.ones(len(self.joint_ids))
+            stepj = currj + v * speed
             for id,joint in enumerate(self.joint_ids):
                 # set individual to allow for setting the max Velocity
                 p.setJointMotorControl2(
@@ -98,13 +99,13 @@ class UR3e:
                     jointIndex=self.joint_ids[id],
                     controlMode=p.POSITION_CONTROL,
                     targetPosition=stepj[id],
-                    #velocityGain=0.5,
-                    positionGain=gains[id],
-                   # maxVelocity=speed,
+                    velocityGain=0.5,
+                    positionGain=2.0,
+                   #maxVelocity=2.0,
                    force=100 # this is way too high for the UR3e, but makes the simulation more stable..
                 )
 
-            self._compensate_gravity()
+            #self._compensate_gravity()
 
             p.stepSimulation()
             if self.simulate_real_time:
@@ -112,19 +113,34 @@ class UR3e:
         print(f'Warning: movej exceeded {max_steps} simulation steps. Skipping.')
         return False
 
-    def movep(self, pose: np.ndarray, speed=1.5, max_steps = 200) -> bool:
+    def movep(self, pose: np.ndarray, speed=0.01, max_steps = 1000) -> bool:
         """Move UR3e to target end effector pose.
 
         :param pose: a 7D pose - position [meters] + orientation [Quaternion, radians]
         """
-
-        targj = self.solve_ik(pose)
+        targj = self.solve_ik_ikfast(pose)
         return self.movej(targj, speed,max_steps)
 
     def movep_linear(self,pose:np.ndarray, speed=1.5):
         #todo: linear EEF motions
         raise NotImplementedError
 
+    def solve_ik_ikfast(self, pose:np.ndarray) -> np.ndarray:
+        p = np.copy(pose)
+        w = pose[-1]
+        p[4:] = pose[3:6]
+        p[3] = w
+
+        targj = None
+        for _ in range(6):
+            p[4:] += np.random.randn(3) * 0.01
+            targj = self.ikfast_ur3e_solver.inverse(p,q_guess=self.get_joint_configuration())
+            if targj is not None:
+                break
+
+        if targj is None:
+            raise ValueError("FastIK failed... most likely the pose is out of reach of the robot?")
+        return targj
 
     def solve_ik(self, pose: np.ndarray) -> np.ndarray:
         """Calculate joint configuration with inverse kinematics.
@@ -142,9 +158,11 @@ class UR3e:
             # note that these limit the workspace of the robot!
             # with a decent planner such constraints are not required nor desirable.
 
-            lowerLimits=[- 5/4*np.pi, -np.pi, 0, -0.95*np.pi, -np.pi, -2*np.pi],
-            upperLimits=[2*np.pi/4, 0, np.pi, -0.05*np.pi, 0, 2*np.pi],
-            jointRanges=[1.5*np.pi, np.pi, np.pi, 0.9*np.pi, np.pi, 4*np.pi],
+            # also note that unreachable poses will still return a configuration...
+
+            lowerLimits=[- 5/4*np.pi, -np.pi, 0, -1.2*np.pi, -np.pi, -2*np.pi],
+            upperLimits=[2*np.pi/4, 0, np.pi, -0.2*np.pi, 0, 2*np.pi],
+            jointRanges=[1.5*np.pi, np.pi, np.pi, np.pi, np.pi, 4*np.pi],
             restPoses=np.float32(self.homej).tolist(),
             maxNumIterations=100,
             residualThreshold=1e-5)
@@ -196,14 +214,22 @@ if __name__ == "__main__":
     pose = np.array(pose)
     robot.movep(pose,max_steps=2000)
     pose = [-0.2, -0.23, 0.2]
-    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose.extend(p.getQuaternionFromEuler([np.pi*0.99, 0, 0]))
     pose = np.array(pose)
     robot.movep(pose,max_steps=2000)
-    pose = [-0.4, -0.0, 0.2]
+    pose = [-0.4, -0.0, 0.01]
     pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
     pose = np.array(pose)
     robot.movep(pose,max_steps=2000)
     pose = [-0.0, -0.25, 0.01]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    pose = [-0.0, -0.27, 0.01]
+    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = np.array(pose)
+    robot.movep(pose,max_steps=2000)
+    pose = [-0.0, -0.25, 0.0001]
     pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
     pose = np.array(pose)
     robot.movep(pose,max_steps=2000)
