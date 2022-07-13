@@ -159,14 +159,21 @@ class UR3ePush(gym.Env):
         target_position = np.array(self._get_target_position_on_plane())
 
         reward = - np.linalg.norm(object_position - target_position)
-        reward += 10 * (np.linalg.norm(object_position - target_position) < UR3ePush.goal_l2_margin)  # greatly improves learning efficiency
+        if not self.use_push_primitive:
+            # incentivize robot to move to object
+            # z=0.01 to incentivize contact and hence move the object so that the other loss component is also used.
+            # the scale is tricky: too low and the object distance trumps it,
+            # too high and it will create a local optimum to go on top of the disc and hold still
+            # 1.0 appeared to be okay. 0.3 was too low.
+            reward -= 1.0 * np.linalg.norm(self.robot.get_eef_pose()[:3]- np.concatenate((object_position,np.array([0.01]))))
+        reward += 10 * (np.linalg.norm(target_position-object_position) < UR3ePush.goal_l2_margin)  # greatly improves learning efficiency
         return reward
 
     def _done(self) -> bool:
         object_position = np.array(self._get_object_position_on_plane())
         target_position = np.array(self._get_target_position_on_plane())
 
-        done = np.linalg.norm(object_position - target_position) < UR3ePush.goal_l2_margin
+        done = np.linalg.norm(target_position-object_position) < UR3ePush.goal_l2_margin
         done = done or not self.position_is_in_object_space(object_position)
         done = done or not self.current_episode_duration < self.max_episode_duration
         return done

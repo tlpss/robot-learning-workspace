@@ -15,14 +15,14 @@ if __name__ == "__main__":
 
     folder_path = pathlib.Path(__file__).parent
     config = {
-        "gamma": 0.9,
-        "lr": 3e-3,
-        "learning_starts": 300,
+        "gamma": 0.99,
+        "lr": 4e-3,
+        "learning_starts": 500,
         "batch_size": 128,
-        "time_steps": 6000,
+        "time_steps": 50000,
         "seed": 2022,
         "use_state_observations": True,
-        "use_push_primitive":True,
+        "use_push_primitive": False,
 
     }
 
@@ -35,14 +35,14 @@ if __name__ == "__main__":
     # https://docs.wandb.ai/guides/integrations/other/stable-baselines-3
 
 
-    #run = wandb.init(project="ur_pusher", config=config, sync_tensorboard=True)
+    run = wandb.init(project="ur_pusher", config=config, sync_tensorboard=True, mode='online')
 
     model = SAC("MlpPolicy", env, verbose=1, seed=config["seed"], learning_starts=config["learning_starts"],
                     gamma=config["gamma"], learning_rate=config["lr"], tensorboard_log=tb_path,
-                    batch_size=config["batch_size"], device='cpu')
+                    batch_size=config["batch_size"], device='cpu',tau=0.02)
 
     eval_callback = EvalCallback(env, n_eval_episodes=5,eval_freq=500)
-
+    wandb_callback = WandbCallback()
     # do not reset num timesteps when continuing learning, this will keep the logging consistent between runs.
-    model.learn(total_timesteps=config["time_steps"], log_interval=5, callback=[eval_callback])
+    model.learn(total_timesteps=config["time_steps"], log_interval=5, callback=[eval_callback, wandb_callback])
 
