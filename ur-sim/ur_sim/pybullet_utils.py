@@ -1,7 +1,7 @@
 import pybullet as p
 
 
-def set_debug_rendering(state:int):
+def set_debug_rendering(state: int):
     p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, state)
 
 

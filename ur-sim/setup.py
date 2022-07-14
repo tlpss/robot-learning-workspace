@@ -1,4 +1,3 @@
-
 import setuptools
 
 setuptools.setup(
@@ -8,8 +7,5 @@ setuptools.setup(
     author_email="thomas.lips@ugent.be",
     description="Mujoco Simulation Toolbox for UR robots at the AIRO reasearch group",
     packages=["ur_sim"],
-    install_requires=[
-        "mujoco>=2.2.0",
-        "dm-control==1.0.3.post1"
-    ],
+    install_requires=["mujoco>=2.2.0", "dm-control==1.0.3.post1"],
 )

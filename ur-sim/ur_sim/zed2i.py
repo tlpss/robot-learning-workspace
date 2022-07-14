@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pybullet as p
 import pybullet_data
-
 from ur_sim.assets.path import get_asset_root_folder
 
 
@@ -13,6 +12,7 @@ class Zed2i:
     """
     Class for simulating a Zed2i camera in PyBullet.
     """
+
     # https://support.stereolabs.com/hc/en-us/articles/360007395634-What-is-the-camera-focal-length-and-field-of-view-
 
     z_range = (0.25, 3)
@@ -47,19 +47,26 @@ class Zed2i:
         # with some additional thingies to avoid z-depth information loss.
         # http://ksimek.github.io/2013/06/03/calibrated_cameras_in_opengl/
         aspect_ratio = self.image_size[0] / self.image_size[1]
-        vertical_fov = np.arctan(self.image_size[1] / 2 / self.focal_length_in_pixels) * 2  # verify by drawing pinhole!
+        vertical_fov = (
+            np.arctan(self.image_size[1] / 2 / self.focal_length_in_pixels) * 2
+        )  # verify by drawing pinhole!
         vertical_fov_degrees = vertical_fov * 180 / np.pi
-        self.projection_matrix = p.computeProjectionMatrixFOV(vertical_fov_degrees, aspect_ratio, Zed2i.z_range[0],
-                                                              Zed2i.z_range[1])
+        self.projection_matrix = p.computeProjectionMatrixFOV(
+            vertical_fov_degrees, aspect_ratio, Zed2i.z_range[0], Zed2i.z_range[1]
+        )
 
-    def get_image(self) -> Tuple[np.ndarray,np.ndarray,np.ndarray]:
+    def get_image(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         :return: RGB image (H,W,3); depth image (H,w) [meters]; segmentation [ObjectID in pybullet].
         """
-        _, _, rgb, depth, segmentation = p.getCameraImage(width=self.image_size[0], height=self.image_size[1],
-                                                          viewMatrix=self.view_matrix,
-                                                          projectionMatrix=self.projection_matrix, shadow=1,
-                                                          renderer=p.ER_BULLET_HARDWARE_OPENGL)
+        _, _, rgb, depth, segmentation = p.getCameraImage(
+            width=self.image_size[0],
+            height=self.image_size[1],
+            viewMatrix=self.view_matrix,
+            projectionMatrix=self.projection_matrix,
+            shadow=1,
+            renderer=p.ER_BULLET_HARDWARE_OPENGL,
+        )
 
         color_image_size = (self.image_size[1], self.image_size[0], 4)
         rgb = np.array(rgb, dtype=np.uint8).reshape(color_image_size)
@@ -69,8 +76,8 @@ class Zed2i:
         depth_image_size = (self.image_size[1], self.image_size[0])
         znear, zfar = Zed2i.z_range
         zbuffer = np.array(depth).reshape(depth_image_size)
-        depth = (zfar + znear - (2. * zbuffer - 1.) * (zfar - znear))
-        depth = (2. * znear * zfar) / depth
+        depth = zfar + znear - (2.0 * zbuffer - 1.0) * (zfar - znear)
+        depth = (2.0 * znear * zfar) / depth
 
         # Get segmentation image.
         segmentation = np.uint8(segmentation).reshape(depth_image_size)
@@ -79,11 +86,11 @@ class Zed2i:
 
 def test_camera_outputs():
     asset_path = get_asset_root_folder()
-    physicsClient = p.connect(p.DIRECT)  # or p.DIRECT for non-graphical version
+    p.connect(p.DIRECT)  # or p.DIRECT for non-graphical version
     p.setAdditionalSearchPath(pybullet_data.getDataPath())  # optionally
     p.setGravity(0, 0, -10)
-    planeId = p.loadURDF("plane.urdf", [0, 0, -1.0])
-    tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
+    p.loadURDF("plane.urdf", [0, 0, -1.0])
+    p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
     cubeId = p.loadURDF("cube.urdf", [0, 0, 0.04], globalScaling=0.1)
 
     cam = Zed2i([1, 0, 0.0])
@@ -97,8 +104,9 @@ def test_camera_outputs():
 
     # check if depth image is z-image in meters.
     cube_distance = depth[cam.image_size[1] // 2, cam.image_size[0] // 2]
-    cube_distance2 = depth[cam.image_size[1] // 2 - 40, cam.image_size[
-        0] // 2]  # check this is really the z-buffer, not the distance to the eye
+    cube_distance2 = depth[
+        cam.image_size[1] // 2 - 40, cam.image_size[0] // 2
+    ]  # check this is really the z-buffer, not the distance to the eye
     assert np.isclose(cube_distance, 0.95)  # camera at 1m of origin, cube has width of 10cm, centered on origin
     assert np.isclose(cube_distance2, 0.95)
 
@@ -108,14 +116,14 @@ def test_camera_outputs():
 
 def explore_camera_output():
     asset_path = get_asset_root_folder()
-    physicsClient = p.connect(p.GUI)  # or p.DIRECT for non-graphical version
+    p.connect(p.GUI)  # or p.DIRECT for non-graphical version
     p.setAdditionalSearchPath(pybullet_data.getDataPath())  # optionally
     p.setGravity(0, 0, -10)
-    planeId = p.loadURDF("plane.urdf", [0, 0, -1.0])
-    tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
-    cubeId = p.loadURDF("cube.urdf", [0, 0, 0.04], globalScaling=0.1)
+    p.loadURDF("plane.urdf", [0, 0, -1.0])
+    p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
+    p.loadURDF("cube.urdf", [0, 0, 0.04], globalScaling=0.1)
 
-    cam = Zed2i([0, -0.3001, 1],target_position=[0,-0.3,0])
+    cam = Zed2i([0, -0.3001, 1], target_position=[0, -0.3, 0])
     img, depth, segm = cam.get_image()
     plt.imshow(img)
     plt.show()
@@ -125,7 +133,7 @@ def explore_camera_output():
     plt.show()
     time.sleep(20)
 
-if __name__ == "__main__":
-    #test_camera_outputs()
-    explore_camera_output()
 
+if __name__ == "__main__":
+    # test_camera_outputs()
+    explore_camera_output()
