@@ -9,7 +9,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 import os
 from wandb.integration.sb3 import WandbCallback
 import torch
-
+from gym_video_wrapper import VideoRecorderWrapper
 
 if __name__ == "__main__":
 
@@ -29,7 +29,8 @@ if __name__ == "__main__":
 
     torch.manual_seed(config["seed"])
 
-    env = UR3ePush(state_observation=config["use_state_observations"],push_primitive=config["use_push_primitive"],real_time=True)
+    env = UR3ePush(state_observation=config["use_state_observations"],push_primitive=config["use_push_primitive"],real_time=False)
+    env = VideoRecorderWrapper(env, folder_path / "videos")
 
     tb_path = folder_path / "ur_pusher_state_tb/"
     # https://docs.wandb.ai/guides/integrations/other/stable-baselines-3

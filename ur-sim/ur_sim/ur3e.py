@@ -133,13 +133,16 @@ class UR3e:
 
         targj = None
         for _ in range(6):
+            # fix for axis-aligned orientations (which is often used in e.g. top-down EEF orientations
+            # add random noise to the EEF orienation to avoid axis-alignment
+            # see https://github.com/cambel/ur_ikfast/issues/4
             p[4:] += np.random.randn(3) * 0.01
             targj = self.ikfast_ur3e_solver.inverse(p,q_guess=self.get_joint_configuration())
             if targj is not None:
                 break
 
         if targj is None:
-            raise ValueError("FastIK failed... most likely the pose is out of reach of the robot?")
+            raise ValueError("IKFast failed... most likely the pose is out of reach of the robot?")
         return targj
 
     def solve_ik(self, pose: np.ndarray) -> np.ndarray:

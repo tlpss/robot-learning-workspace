@@ -39,6 +39,9 @@ class UR3ePush(gym.Env):
     image_dimensions = (64,64) # dimensions of rgb observation
 
     def __init__(self, state_observation = False, push_primitive = False, real_time=False):
+        super().__init__()
+        self.metadata["render.modes"] = ["rgb_array"] # required for VideoRecorder wrapper
+
         self.use_state_observation = state_observation
         self.use_push_primitive = push_primitive
         self.simulate_real_time = real_time
