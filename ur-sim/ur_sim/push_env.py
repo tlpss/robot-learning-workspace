@@ -1,4 +1,5 @@
 import logging
+from enum import Enum
 from typing import Any, List, Tuple
 
 import gym
@@ -7,9 +8,15 @@ import pybullet as p
 import pybullet_data
 from PIL import Image
 from ur_sim.assets.path import get_asset_root_folder
+from ur_sim.demonstrations import Demonstration
 from ur_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
 from ur_sim.ur3e import UR3e
 from ur_sim.zed2i import Zed2i
+
+class OracleStates(Enum):
+    TO_PREPUSH = 0
+    TO_PUSH = 1
+    PUSH = 2
 
 
 class UR3ePush(gym.Env):
@@ -18,6 +25,11 @@ class UR3ePush(gym.Env):
 
     push_primitive: an angle and distance (continuous, angle [0-2Pi] range [0-0.2m]
     standard: a Delta on the robot position (continous, xyz :[-0.05m, 0.05m])
+
+    Observation space
+    #todo: complete
+    state observations:
+    standard:
     """
 
     goal_l2_margin = 0.05
@@ -78,10 +90,13 @@ class UR3ePush(gym.Env):
         self.max_episode_duration = 20 if self.use_push_primitive else 100
         self.current_episode_duration = 0
 
+
+        self.oracle_state = OracleStates.TO_PREPUSH # FSM for the step oracle
         self.reset()
 
     def reset(self):
         self.current_episode_duration = 0
+        self.oracle_state = OracleStates.TO_PREPUSH # reset FSM for the step oracle
         if p.isConnected():
             p.resetSimulation()
         else:
@@ -101,13 +116,13 @@ class UR3ePush(gym.Env):
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -1.0])
         self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         if self.use_push_primitive:
-            self.initial_eef_pose = UR3ePush.primitive_home_pose
+            self.initial_eef_pose[:3] = UR3ePush.primitive_home_pose
         # todo: surpress pybullet output during loading of URDFs.. (see pybullet_planning repo)
         else:
             # get random positions as this improves exploration and robustness of the learned policies.
             # exploration as it will spawn close to the object every now and then, robustness as it will have to learn
             # to deal with arbitrary start positions.
-            self.initial_eef_pose = self._get_random_eef_position()
+            self.initial_eef_pose[:3] = self._get_random_eef_position()
         if self.robot is None:
             self.robot = UR3e(eef_start_pose=self.initial_eef_pose, simulate_real_time=self.simulate_real_time)
         else:
@@ -283,7 +298,7 @@ class UR3ePush(gym.Env):
 
         self.robot.movep(eef_target_position, speed=speed, max_steps=max_steps)
 
-    def calculate_optimal_primitive(self):
+    def oracle_primitive_step(self):
         current_position = self._get_object_position_on_plane()
         vector = np.array(self._get_target_position_on_plane()) - current_position
         angle = np.arctan2(vector[1], vector[0])
@@ -294,12 +309,76 @@ class UR3ePush(gym.Env):
             angle += 2 * np.pi
         return angle, length
 
-    def oracle(self):
+    def oracle_delta_step(self):
         """
-        Calculate the optimal angle and length assuming perfect observation.
+        returns an action according to the oracle policy given the action space.
+        Keeps a finite state machine to check in what stage the policy is.
+
+
+    d
+
+        :return:
         """
-        angle, length = self.calculate_optimal_primitive()
+
+        #todo: find the prepush, push, pushtarget poses
+        # keep track of which phase
+        # find direction of movement and clip to the allowed box.
+        # return the delta eef position
+
+        if self.oracle_state == OracleStates.TO_PREPUSH:
+            pass
+        elif self.oracle_state == OracleStates.TO_PUSH:
+            pass
+        else:
+            #pushing
+            pass
+
+    def oracle_step(self):
+        if self.use_push_primitive:
+            return self.oracle_primitive_step()
+        else:
+            return self.oracle_delta_step()
+
+    def collect_demonstrations(self, n_demonstrations: int, path: str):
+        """
+        Collects and stores demonstrations of the task using the oracle policy. The observation and action type
+        are taken from the class instance. Demonstrations are stored as a pickle of a  List of ur-sim::Demonstration's
+
+
+        :param n_demonstrations:
+        :param path: path to store the pickle file
+        :return: List of demonstrations
+        """
+        demonstrations = []
+        for i in range(n_demonstrations):
+            demonstration = Demonstration()
+            obs = self.reset()
+            done = False
+            demonstration.observations.append(obs)
+            while not done:
+                action = self.oracle_step()
+                obs,reward,done,_ = self.step(action)
+                demonstration.actions.append(action)
+                demonstration.observations.append(obs)
+            demonstrations.append(demonstration)
+
+        # store demonstrations in pickle file
+        #todo: save as pickle file
+        return demonstrations
+
+
+
+
+
+    def execute_primitive_oracle(self):
+        """
+        convenience function that calculates the optimal angle and length assuming perfect observation.
+        """
+        angle, length = self.oracle_primitive_step()
         self._execute_motion_primitive(angle, length)
+
+
+
 
     @staticmethod
     def _clip_target_position(eef_target_position: np.ndarray) -> np.ndarray:
@@ -375,7 +454,7 @@ if __name__ == "__main__":
     while True:
         if done:
             obs = env.reset()
-        angle, distance = env.calculate_optimal_primitive()
+        angle, distance = env.oracle_primitive_step()
         # angle = np.random.random(1).item() * 2 * np.pi
         # distance = np.random.random(1).item() * 0.2
         obs, reward, done, _ = env.step(np.array([angle, distance]))
