@@ -8,7 +8,7 @@ from ur_sim.assets.path import get_asset_root_folder
 
 asset_path = get_asset_root_folder()
 
-from ur_ikfast.ur_ikfast import ur_kinematics
+from ur_ikfast import ur_kinematics
 
 
 class UR3e:

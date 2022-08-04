@@ -1,6 +1,5 @@
 import numpy as np
-
-from ur_ikfast.ur_ikfast import ur_kinematics
+from ur_ikfast import ur_kinematics
 
 if __name__ == "__main__":
     ur3e_arm = ur_kinematics.URKinematics("ur3e")
