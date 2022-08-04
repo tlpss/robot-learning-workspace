@@ -3,7 +3,6 @@ matplotlib
 pybullet==3.2.5
 gym
 numpy
--e git+git://https://github.com/cambel/ur_ikfast
-wandb
 pre-commit
 imageio
+-e .

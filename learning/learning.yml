@@ -1,0 +1,9 @@
+channels:
+  - conda-forge
+  - torch
+dependencies:
+  - pytorch=1.12 # use system cuda.
+  - torchvision
+  -pip:
+    - wandb
+    - stable-baselines3
