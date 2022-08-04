@@ -4,7 +4,7 @@ The robot setup mimicks the AIRO research setup with UR3e robots, Robotiq 2F85 g
 
 ## Pybullet Env 
 ### Local Installation
-- create a conda environment `conda env create -n robot-learning-playground` and activate it with `conda activate robot-learning-playground`
+- create a conda environment `conda env create -n robot-learning-playground` and activate it with `conda activate robot-learning-playground` (use python3.9 for ikfast)
 - move into the `ur_sim` folder and run `pip install -r requirements.txt`
 - manually install the `ur_ikfast` package using the instructions [here](https://github.com/cambel/ur_ikfast) (and test using `test_ikfast.py`)
 - test that pybullet is working by running the `push_env.py` file. You should see the robot moving.

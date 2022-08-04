@@ -168,7 +168,7 @@ class UR3ePush(gym.Env):
             return obs
         else:
             rgb, depth, _ = self.camera.get_image()
-            
+
             rgb = Image.fromarray(rgb)
             rgb = rgb.crop((400, 0, 1400, 1000))
             rgb = rgb.resize(UR3ePush.image_dimensions)
@@ -317,10 +317,6 @@ class UR3ePush(gym.Env):
         """
         returns an action according to the oracle policy given the action space.
         Keeps a finite state machine to check in what stage the policy is.
-
-
-    d
-
         :return:
         """
         # hacky implementation with some code duplication, fix one day
