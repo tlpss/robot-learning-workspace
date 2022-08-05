@@ -6,6 +6,7 @@ import pybullet
 import pybullet as p
 import pybullet_data
 from ur_sim.assets.path import get_asset_root_folder
+from ur_sim.pybullet_utils import HideOutput
 
 asset_path = get_asset_root_folder()
 
@@ -36,9 +37,12 @@ class UR3e:
         self.reset(eef_start_pose)
 
     def reset(self, pose=None):
-        self.robot_id = p.loadURDF(
-            str(asset_path / "ur3e" / "ur3e.urdf"), self.robot_base_position, flags=pybullet.URDF_USE_INERTIA_FROM_FILE
-        )
+        with HideOutput():
+            self.robot_id = p.loadURDF(
+                str(asset_path / "ur3e" / "ur3e.urdf"),
+                self.robot_base_position,
+                flags=pybullet.URDF_USE_INERTIA_FROM_FILE,
+            )
 
         # Get revolute joint indices of robot_id (skip fixed joints).
         n_joints = p.getNumJoints(self.robot_id)
