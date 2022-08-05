@@ -7,6 +7,7 @@ import gym
 import numpy as np
 import pybullet as p
 import pybullet_data
+import tqdm
 from PIL import Image
 from ur_sim.assets.path import get_asset_root_folder
 from ur_sim.demonstrations import Demonstration
@@ -383,7 +384,7 @@ class UR3ePush(gym.Env):
         :return: List of demonstrations
         """
         demonstrations = []
-        for i in range(n_demonstrations):
+        for i in tqdm.trange(n_demonstrations):
             demonstration = Demonstration()
             obs = self.reset()
             done = False
