@@ -1,4 +1,5 @@
 import numpy as np
+
 from ur_ikfast import ur_kinematics
 
 if __name__ == "__main__":

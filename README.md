@@ -1,8 +1,8 @@
-# Pybullet playground for Robot Learning. 
+# Pybullet playground for Robot Learning.
 
-The robot setup mimicks the AIRO research setup with UR3e robots, Robotiq 2F85 grippers and Zed2i cameras. 
+The robot setup mimicks the AIRO research setup with UR3e robots, Robotiq 2F85 grippers and Zed2i cameras.
 
-## Pybullet Env 
+## Pybullet Env
 ### Local Installation
 - create a conda environment `conda env create -n robot-learning-playground` and activate it with `conda activate robot-learning-playground` (use python3.9 for ikfast)
 - move into the `ur_sim` folder and run `pip install -r requirements.txt`

@@ -1,4 +1,5 @@
 import logging
+import pickle
 from enum import Enum
 from typing import Any, List, Tuple
 
@@ -7,14 +8,12 @@ import numpy as np
 import pybullet as p
 import pybullet_data
 from PIL import Image
-import pickle
-
-
 from ur_sim.assets.path import get_asset_root_folder
 from ur_sim.demonstrations import Demonstration
 from ur_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
 from ur_sim.ur3e import UR3e
 from ur_sim.zed2i import Zed2i
+
 
 class OracleStates(Enum):
     TO_PREPUSH = 0
@@ -93,13 +92,12 @@ class UR3ePush(gym.Env):
         self.max_episode_duration = 20 if self.use_push_primitive else 100
         self.current_episode_duration = 0
 
-
-        self.oracle_state = OracleStates.TO_PREPUSH # FSM for the step oracle
+        self.oracle_state = OracleStates.TO_PREPUSH  # FSM for the step oracle
         self.reset()
 
     def reset(self):
         self.current_episode_duration = 0
-        self.oracle_state = OracleStates.TO_PREPUSH # reset FSM for the step oracle
+        self.oracle_state = OracleStates.TO_PREPUSH  # reset FSM for the step oracle
         if p.isConnected():
             p.resetSimulation()
         else:
@@ -334,13 +332,13 @@ class UR3ePush(gym.Env):
         robot_end_point = block_end_point - push_direction * (UR3ePush.object_radius + UR3ePush.robot_flange_radius)
 
         # create 3D positions from the 2D points
-        robot_start_point = np.concatenate([robot_start_point,np.array([self.primitive_robot_eef_z])])
-        robot_end_point = np.concatenate([robot_end_point,np.array([self.primitive_robot_eef_z])])
+        robot_start_point = np.concatenate([robot_start_point, np.array([self.primitive_robot_eef_z])])
+        robot_end_point = np.concatenate([robot_end_point, np.array([self.primitive_robot_eef_z])])
         pre_push_point = np.copy(robot_start_point)
-        pre_push_point[2] += 0.1 # avoid collisions during approach
+        pre_push_point[2] += 0.1  # avoid collisions during approach
 
         current_robot_position = self.robot.get_eef_pose()[:3]
-        #todo: find the prepush, push, pushtarget poses
+        # todo: find the prepush, push, pushtarget poses
         # keep track of which phase
         # find direction of movement and clip to the allowed box.
         # return the delta eef position
@@ -360,13 +358,14 @@ class UR3ePush(gym.Env):
             elif self.oracle_state == OracleStates.TO_PUSH:
                 self.oracle_state = OracleStates.PUSH
 
-            return np.zeros(3) # little sloppy but easier.
+            return np.zeros(3)  # little sloppy but easier.
 
         if np.linalg.norm(move_direction, np.inf) > self.max_eef_delta:
             eef_delta = move_direction / np.linalg.norm(move_direction, np.inf) * self.max_eef_delta
         else:
             eef_delta = move_direction
         return eef_delta
+
     def oracle_step(self):
         if self.use_push_primitive:
             return self.oracle_primitive_step()
@@ -391,7 +390,7 @@ class UR3ePush(gym.Env):
             demonstration.observations.append(obs)
             while not done:
                 action = self.oracle_step()
-                obs,reward,done,_ = self.step(action)
+                obs, reward, done, _ = self.step(action)
                 demonstration.actions.append(action)
                 demonstration.observations.append(obs)
             demonstrations.append(demonstration)
@@ -408,9 +407,6 @@ class UR3ePush(gym.Env):
         """
         angle, length = self.oracle_primitive_step()
         self._execute_motion_primitive(angle, length)
-
-
-
 
     @staticmethod
     def _clip_target_position(eef_target_position: np.ndarray) -> np.ndarray:
@@ -486,7 +482,7 @@ if __name__ == "__main__":
     while True:
         if done:
             obs = env.reset()
-        #angle, distance = env.oracle_primitive_step()
+        # angle, distance = env.oracle_primitive_step()
         # angle = np.random.random(1).item() * 2 * np.pi
         # distance = np.random.random(1).item() * 0.2
         action = env.oracle_step()

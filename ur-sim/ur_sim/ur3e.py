@@ -1,3 +1,4 @@
+import logging
 import time
 
 import numpy as np
@@ -110,7 +111,7 @@ class UR3e:
             p.stepSimulation()
             if self.simulate_real_time:
                 time.sleep(1.0 / 240)
-        print(f"Warning: movej exceeded {max_steps} simulation steps. Skipping.")
+        logging.debug(f"Warning: movej exceeded {max_steps} simulation steps. Skipping.")
         return False
 
     def movep(self, pose: np.ndarray, speed=0.01, max_steps=1000) -> bool:
