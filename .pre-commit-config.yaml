@@ -5,7 +5,7 @@ repos:
     hooks:
     -   id: check-yaml
     #-   id: check-json
-    -   id: end-of-file-fixer
+    #-   id: end-of-file-fixer
     -   id: trailing-whitespace
     -   id: mixed-line-ending
     -   id: check-added-large-files
@@ -23,7 +23,6 @@ repos:
         name: isort - sort imports
         entry: isort --profile black --line-length 119
         files: \.py$
-        exclude: ^/data-generation/towel/towel/generate_towel_scene.py
         args:
           - --thirdparty=wandb
 
