@@ -10,7 +10,7 @@ import pybullet_data
 import tqdm
 from PIL import Image
 from ur_sim.assets.path import get_asset_root_folder
-from ur_sim.demonstrations import Demonstration
+from ur_sim.demonstrations import Demonstration, save_visual_demonstrations
 from ur_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
 from ur_sim.ur3e import UR3e
 from ur_sim.zed2i import Zed2i
@@ -49,7 +49,7 @@ class UR3ePush(gym.Env):
     max_eef_delta = 0.05  # max change in 1 action per dimension
     eef_space_bounds = (-0.35, 0.2, -0.48, -0.22, 0.015, 0.15)  # (min_x,max_x,min_y,max_y,min_z,max_z)[m]
 
-    image_dimensions = (64, 64)  # dimensions of rgb observation
+    image_dimensions = (128, 128)  # dimensions of rgb observation
 
     def __init__(self, state_observation=False, push_primitive=False, real_time=False):
         super().__init__()
@@ -396,9 +396,12 @@ class UR3ePush(gym.Env):
                 demonstration.observations.append(obs)
             demonstrations.append(demonstration)
 
-        # store demonstrations in pickle file
-        with open(path, "wb") as handle:
-            pickle.dump(demonstrations, handle)
+        if self.use_state_observation:
+            # store demonstrations in pickle file
+            with open(path, "wb") as handle:
+                pickle.dump(demonstrations, handle)
+        else:
+            save_visual_demonstrations(demonstrations, path)
 
         return demonstrations
 
@@ -478,17 +481,19 @@ class UR3ePush(gym.Env):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
-    env = UR3ePush(real_time=True, push_primitive=False, state_observation=False)
-    done = True
-    while True:
-        if done:
-            obs = env.reset()
-        # angle, distance = env.oracle_primitive_step()
-        # angle = np.random.random(1).item() * 2 * np.pi
-        # distance = np.random.random(1).item() * 0.2
-        action = env.oracle_step()
-        print(action)
-        obs, reward, done, _ = env.step(action)
-        print(obs.shape)
-        print(done)
-        # env.render()
+    env = UR3ePush(real_time=False, push_primitive=False, state_observation=False)
+    env.collect_demonstrations(500, "demonstrations_dataset")
+    # done = True
+    # while True:
+    #     if done:
+    #         obs = env.reset()
+    #     # angle, distance = env.oracle_primitive_step()
+    #     # angle = np.random.random(1).item() * 2 * np.pi
+    #     # distance = np.random.random(1).item() * 0.2
+    #     action = env.oracle_step()
+    #     #action = (np.random.random(3)-0.5)*0.1
+    #     print(action)
+    #     obs, reward, done, _ = env.step(action)
+    #     print(obs.shape)
+    #     print(done)
+    #     # env.render()
