@@ -28,7 +28,12 @@ class UR3e:
             assert len(robot_base_position) == 3
             self.robot_base_position = robot_base_position
 
-        self.robot_id = None
+        with HideOutput():
+            self.robot_id = p.loadURDF(
+                str(asset_path / "ur3e" / "ur3e.urdf"),
+                self.robot_base_position,
+                flags=pybullet.URDF_USE_INERTIA_FROM_FILE,
+            )
         self.joint_ids = None
         self.eef_id = 9  # manually determined
 
@@ -37,13 +42,6 @@ class UR3e:
         self.reset(eef_start_pose)
 
     def reset(self, pose=None):
-        with HideOutput():
-            self.robot_id = p.loadURDF(
-                str(asset_path / "ur3e" / "ur3e.urdf"),
-                self.robot_base_position,
-                flags=pybullet.URDF_USE_INERTIA_FROM_FILE,
-            )
-
         # Get revolute joint indices of robot_id (skip fixed joints).
         n_joints = p.getNumJoints(self.robot_id)
         joints = [p.getJointInfo(self.robot_id, i) for i in range(n_joints)]
@@ -197,8 +195,22 @@ if __name__ == "__main__":
     p.resetDebugVisualizerCamera(cameraDistance=1.8, cameraYaw=0, cameraPitch=-45, cameraTargetPosition=target)
 
     planeId = p.loadURDF("plane.urdf", [0, 0, -1.0])
-    tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
+   # tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
     robot = UR3e(simulate_real_time=True)
+
+
+    kuka_gripper_id = p.loadSDF("gripper/wsg50_one_motor_gripper_new_free_base.sdf")[0]
+    # attach gripper to kuka arm
+    kuka_cid = p.createConstraint(robot.robot_id, 9, kuka_gripper_id, 0, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0.00], [0, 0, 0])
+    #kuka_cid2 = p.createConstraint(kuka_gripper_id, 4, kuka_gripper_id, 6, jointType=p.JOINT_GEAR, jointAxis=[1,1,1], parentFramePosition=[0,0,0], childFramePosition=[0,0,0])
+    #p.changeConstraint(kuka_cid2, gearRatio=-1, erp=0.5, relativePositionTarget=0, maxForce=100)
+    # reset gripper
+    jointPositions = [0.000000, -0.011130, -0.206421, 0.205143, -0.0, 0.000000, -0.0, 0.000000]
+    for jointIndex in range(p.getNumJoints(kuka_gripper_id)):
+        p.resetJointState(kuka_gripper_id, jointIndex, jointPositions[jointIndex])
+        p.setJointMotorControl2(kuka_gripper_id, jointIndex, p.POSITION_CONTROL, jointPositions[jointIndex], 0)
+
+    p.resetBasePositionAndOrientation(kuka_gripper_id, robot.get_eef_pose()[:3], robot.get_eef_pose()[3:])
     time.sleep(2.0)
     for _ in range(200):
         p.stepSimulation()
@@ -234,5 +246,12 @@ if __name__ == "__main__":
     pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
     pose = np.array(pose)
     robot.movep(pose, max_steps=2000)
+
+    p.setJointMotorControl2(kuka_gripper_id, 4, p.POSITION_CONTROL, targetPosition=-0.009, force=100)
+    p.setJointMotorControl2(kuka_gripper_id, 6, p.POSITION_CONTROL, targetPosition=0.0, force=100)
+
+    for _ in range(20):
+        p.stepSimulation()
+
     time.sleep(10.0)
     p.disconnect()

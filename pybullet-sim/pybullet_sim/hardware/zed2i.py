@@ -19,13 +19,9 @@ class Zed2i:
 
     Doing this in sim would incur unnecessary rendering costs.
 
-
-
-    
     """
-
+    # default values for FullHD profile taken from
     # https://support.stereolabs.com/hc/en-us/articles/360007395634-What-is-the-camera-focal-length-and-field-of-view-
-
     z_range = (0.25, 3)
     hw_image_size = (1920,1080)
     hw_focal_length_in_pixels = 1000
@@ -39,7 +35,6 @@ class Zed2i:
         self.image_size = image_size
         self.eye_position = eye_position
         self.target_position = target_position if target_position is not None else [0, 0, 0]
-
 
         self.projection_matrix, self.view_matrix = self._get_camera_matrices()
 
