@@ -3,8 +3,8 @@ import unittest
 
 import pybullet as p
 import pybullet_data
-from ur_sim.assets.path import get_asset_root_folder
-from ur_sim.zed2i import Zed2i
+from pybullet_sim.assets.path import get_asset_root_folder
+from pybullet_sim.zed2i import Zed2i
 
 
 class TestZed2i(unittest.TestCase):

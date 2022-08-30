@@ -1,0 +1,19 @@
+name: robot-learning
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pytorch=1.12
+  - cudatoolkit=11.3
+  - torchvision
+  - pip
+  - pip:
+    - wandb
+    - stable-baselines3
+    - pytorch-lightning
+    - imageio
+    - albumentations
+    - timm
+    - pytest
+    - pre-commit

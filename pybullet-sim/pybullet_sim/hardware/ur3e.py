@@ -5,8 +5,8 @@ import numpy as np
 import pybullet
 import pybullet as p
 import pybullet_data
-from ur_sim.assets.path import get_asset_root_folder
-from ur_sim.pybullet_utils import HideOutput
+from pybullet_sim.assets.path import get_asset_root_folder
+from pybullet_sim.pybullet_utils import HideOutput
 
 asset_path = get_asset_root_folder()
 
@@ -16,7 +16,7 @@ from ur_ikfast import ur_kinematics
 class UR3e:
     """
     Synchronous Interface for a simulated UR3e robot in PyBullet.
-    Uses the (limited) inverse kinematics of Bullet.
+    Uses IKFast to improve on the (limited) inverse kinematics of Bullet.
     """
 
     def __init__(self, robot_base_position=None, eef_start_pose=None, simulate_real_time=False):
