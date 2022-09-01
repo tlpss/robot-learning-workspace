@@ -4,3 +4,5 @@
 **tb/
 **.gif
 **.ckpt
+**/ur-ikfast/
+**.pyc

@@ -9,11 +9,12 @@ import pybullet as p
 import pybullet_data
 import tqdm
 from PIL import Image
-from ur_sim.assets.path import get_asset_root_folder
-from ur_sim.demonstrations import Demonstration, save_visual_demonstrations
-from ur_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
-from ur_sim.ur3e import UR3e
-from ur_sim.zed2i import Zed2i
+from pybullet_sim.assets.path import get_asset_root_folder
+from pybullet_sim.demonstrations import Demonstration, save_visual_demonstrations
+from pybullet_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
+from pybullet_sim.hardware.ur3e import UR3e
+from pybullet_sim.hardware.robotiq2F85 import Robotiq2F85
+from pybullet_sim.hardware.zed2i import Zed2i
 
 
 class OracleStates(Enum):
@@ -34,7 +35,6 @@ class UR3ePush(gym.Env):
     state observations:
     standard:
     """
-
     goal_l2_margin = 0.05
     primitive_max_push_distance = 0.15
     primitive_robot_eef_z = 0.02
@@ -61,10 +61,11 @@ class UR3ePush(gym.Env):
 
         self.asset_path = get_asset_root_folder()
         # initialize the front camera (top-down -> lots of occlusions)
-        self.camera = Zed2i([0, -1.001, 0.4], target_position=[0, -0.3, 0])
+        self.camera = Zed2i([0, -1.001, 0.4], image_size=UR3ePush.image_dimensions, target_position=[0, -0.3, 0])
 
         self.plane_id = None
         self.robot = None
+        self.gripper = None
         self.table_id = None
         self.disc_id = None
         self.target_id = None
@@ -114,21 +115,20 @@ class UR3ePush(gym.Env):
         p.resetDebugVisualizerCamera(cameraDistance=1.8, cameraYaw=0, cameraPitch=-45, cameraTargetPosition=[0, 0, 0])
 
         disable_debug_rendering()  # will do nothing if not enabled.
-
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -1.0])
         self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         if self.use_push_primitive:
             self.initial_eef_pose[:3] = UR3ePush.primitive_home_pose
-        # todo: surpress pybullet output during loading of URDFs.. (see pybullet_planning repo)
         else:
             # get random positions as this improves exploration and robustness of the learned policies.
             # exploration as it will spawn close to the object every now and then, robustness as it will have to learn
             # to deal with arbitrary start positions.
             self.initial_eef_pose[:3] = self._get_random_eef_position()
-        if self.robot is None:
-            self.robot = UR3e(eef_start_pose=self.initial_eef_pose, simulate_real_time=self.simulate_real_time)
-        else:
-            self.robot.reset(self.initial_eef_pose)
+        
+        self.gripper = Robotiq2F85()
+        self.robot = UR3e(eef_start_pose=self.initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_real_time)
+        # only close gripper AFTER it was attached to robot! pybullet does weird stuff if you don't.
+        self.gripper.close_gripper()
         self.initial_object_position[:2] = self.get_random_object_position(np.array(self.target_position[:2]))
         self.disc_id = p.loadURDF(
             str(self.asset_path / "cylinder" / "1:2cylinder.urdf"), self.initial_object_position, globalScaling=0.1
@@ -169,8 +169,6 @@ class UR3ePush(gym.Env):
             rgb, depth, _ = self.camera.get_image()
 
             rgb = Image.fromarray(rgb)
-            rgb = rgb.crop((400, 0, 1400, 1000))
-            rgb = rgb.resize(UR3ePush.image_dimensions)
             rgb = np.array(rgb)
 
             return rgb
@@ -214,7 +212,7 @@ class UR3ePush(gym.Env):
 
             eef_target_position = self.robot.get_eef_pose()[0:3] + action
             eef_target_position = self._clip_target_position(eef_target_position)
-            if np.linalg.norm(eef_target_position) < 0.55:
+            if np.linalg.norm(eef_target_position) < 0.55: # check if reachable by robot.
                 self._move_robot(eef_target_position, speed=0.002, max_steps=100)
         # get new observation
         new_obs = self.get_current_observation()
@@ -297,6 +295,7 @@ class UR3ePush(gym.Env):
 
         eef_target_position[0:3] = position
         eef_target_position = self._clip_target_position(eef_target_position)
+
         logging.debug(f"target EEF pose = {eef_target_position.tolist()[:3]}")
 
         self.robot.movep(eef_target_position, speed=speed, max_steps=max_steps)
@@ -475,25 +474,26 @@ class UR3ePush(gym.Env):
             position = np.array([x, y, z])
             logging.debug(f"proposed eef reset {position}")
             if UR3ePush._position_is_in_workspace(position):
+
                 return position
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
-    env = UR3ePush(real_time=False, push_primitive=False, state_observation=False)
-    env.collect_demonstrations(500, "demonstrations_dataset")
-    # done = True
-    # while True:
-    #     if done:
-    #         obs = env.reset()
-    #     # angle, distance = env.oracle_primitive_step()
-    #     # angle = np.random.random(1).item() * 2 * np.pi
-    #     # distance = np.random.random(1).item() * 0.2
-    #     action = env.oracle_step()
-    #     #action = (np.random.random(3)-0.5)*0.1
-    #     print(action)
-    #     obs, reward, done, _ = env.step(action)
-    #     print(obs.shape)
-    #     print(done)
-    #     # env.render()
+    env = UR3ePush(real_time=True, push_primitive=False, state_observation=False)
+    # env.collect_demonstrations(500, "demonstrations_dataset")
+    done = True
+    while True:
+        if done:
+            obs = env.reset()
+        # angle, distance = env.oracle_primitive_step()
+        # angle = np.random.random(1).item() * 2 * np.pi
+        # distance = np.random.random(1).item() * 0.2
+        action = env.oracle_step()
+        #action = (np.random.random(3)-0.5)*0.1
+        print(action)
+        obs, reward, done, _ = env.step(action)
+        print(obs.shape)
+        print(done)
+        # env.render()

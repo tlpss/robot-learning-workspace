@@ -6,3 +6,5 @@ numpy
 pre-commit
 imageio
 -e .
+Cython
+-e git+https://github.com/cambel/ur_ikfast.git#egg=ur_ikfast
