@@ -1,7 +1,6 @@
 import time
 from typing import Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pybullet as p
 import pybullet_data
@@ -135,6 +134,7 @@ def test_camera_outputs():
 
 
 def explore_camera_output():
+    import matplotlib.pyplot as plt
     asset_path = get_asset_root_folder()
     p.connect(p.GUI)  # or p.DIRECT for non-graphical version
     p.setAdditionalSearchPath(pybullet_data.getDataPath())  # optionally

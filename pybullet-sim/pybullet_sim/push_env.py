@@ -114,7 +114,6 @@ class UR3ePush(gym.Env):
         p.resetDebugVisualizerCamera(cameraDistance=1.8, cameraYaw=0, cameraPitch=-45, cameraTargetPosition=[0, 0, 0])
 
         disable_debug_rendering()  # will do nothing if not enabled.
-
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -1.0])
         self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         if self.use_push_primitive:
@@ -125,10 +124,7 @@ class UR3ePush(gym.Env):
             # exploration as it will spawn close to the object every now and then, robustness as it will have to learn
             # to deal with arbitrary start positions.
             self.initial_eef_pose[:3] = self._get_random_eef_position()
-        if self.robot is None:
-            self.robot = UR3e(eef_start_pose=self.initial_eef_pose, simulate_real_time=self.simulate_real_time)
-        else:
-            self.robot.reset(self.initial_eef_pose)
+        self.robot = UR3e(eef_start_pose=self.initial_eef_pose, simulate_real_time=self.simulate_real_time)
         self.initial_object_position[:2] = self.get_random_object_position(np.array(self.target_position[:2]))
         self.disc_id = p.loadURDF(
             str(self.asset_path / "cylinder" / "1:2cylinder.urdf"), self.initial_object_position, globalScaling=0.1
@@ -212,7 +208,7 @@ class UR3ePush(gym.Env):
 
             eef_target_position = self.robot.get_eef_pose()[0:3] + action
             eef_target_position = self._clip_target_position(eef_target_position)
-            if np.linalg.norm(eef_target_position) < 0.55:
+            if np.linalg.norm(eef_target_position) < 0.55: # check if reachable by robot.
                 self._move_robot(eef_target_position, speed=0.002, max_steps=100)
         # get new observation
         new_obs = self.get_current_observation()
@@ -472,7 +468,8 @@ class UR3ePush(gym.Env):
             z = np.random.random() * 0.2
             position = np.array([x, y, z])
             logging.debug(f"proposed eef reset {position}")
-            if UR3ePush._position_is_in_workspace(position):
+            if UR3ePush._position_is_in_workspace(position) and np.linalg.norm(position) < 0.3: # check if reachable by robot.
+
                 return position
 
 

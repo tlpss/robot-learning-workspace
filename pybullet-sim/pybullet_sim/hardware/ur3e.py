@@ -7,8 +7,8 @@ import pybullet as p
 import pybullet_data
 from pybullet_sim.assets.path import get_asset_root_folder
 from pybullet_sim.pybullet_utils import HideOutput
-
 asset_path = get_asset_root_folder()
+from pybullet_sim.hardware.robotiq2F85 import Gripper
 
 from ur_ikfast import ur_kinematics
 
@@ -19,9 +19,10 @@ class UR3e:
     Uses IKFast to improve on the (limited) inverse kinematics of Bullet.
     """
 
-    def __init__(self, robot_base_position=None, eef_start_pose=None, simulate_real_time=False):
+    def __init__(self, robot_base_position=None,eef_start_pose=None,gripper: Gripper= None, simulate_real_time=False):
         self.simulate_real_time = simulate_real_time
         self.homej = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi
+
         if robot_base_position is None:
             self.robot_base_position = [0, 0, 0]
         else:
@@ -36,6 +37,11 @@ class UR3e:
             )
         self.joint_ids = None
         self.eef_id = 9  # manually determined
+
+        self.gripper = gripper
+        self.tcp_offset = None # offset for Tool Center Point, can be used to account for EEF
+        if self.gripper:
+            self.tcp_offset = gripper.tcp_offset
 
         self.ikfast_ur3e_solver = ur_kinematics.URKinematics("ur3e")
 
@@ -52,21 +58,29 @@ class UR3e:
             p.resetJointState(self.robot_id, self.joint_ids[i], self.homej[i])
 
         if pose is not None:
-            joint_config = self.solve_ik(pose)
+            joint_config = self.solve_ik_ikfast(pose)
             # Move robot to target pose starting from the home joint configuration.
             for i in range(len(self.joint_ids)):
                 p.resetJointState(self.robot_id, self.joint_ids[i], joint_config[i])
 
+        if self.gripper:
+            self.gripper.reset(self._get_robot_pose())
+            self.gripper.attach_with_constraint_to_robot(self.robot_id,self.eef_id)
+
+    def _get_robot_pose(self) -> np.ndarray:
+                link_info = p.getLinkState(self.robot_id, self.eef_id)
+                position = link_info[0]
+                orientation = link_info[1]
+                return  np.array(position + orientation)
     def get_eef_pose(self) -> np.ndarray:
         """
 
         :return: 7D pose: Position [m], Orientation [Quaternion, radians]
         """
-        link_info = p.getLinkState(self.robot_id, self.eef_id)
-        position = link_info[0]
-        orientation = link_info[1]
-        return np.array(position + orientation)
-
+        pose = self._get_robot_pose()
+        if self.gripper:
+            pose[:3] -= self.tcp_offset
+        return pose
     def get_joint_configuration(self) -> np.ndarray:
         """
 
@@ -134,6 +148,13 @@ class UR3e:
         p[4:] = pose[3:6]
         p[3] = w
 
+        #to get robot tooltip pose:
+        # get TCP offset
+        # compute the offset along the pose orientation -> subtract from position
+        if self.gripper:
+            p[:3] += self.tcp_offset
+
+
         targj = None
         for _ in range(6):
             # fix for axis-aligned orientations (which is often used in e.g. top-down EEF orientations
@@ -195,25 +216,8 @@ if __name__ == "__main__":
     p.resetDebugVisualizerCamera(cameraDistance=1.8, cameraYaw=0, cameraPitch=-45, cameraTargetPosition=target)
 
     planeId = p.loadURDF("plane.urdf", [0, 0, -1.0])
-   # tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
+    tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
     robot = UR3e(simulate_real_time=True)
-
-
-    kuka_gripper_id = p.loadSDF("gripper/wsg50_one_motor_gripper_new_free_base.sdf")[0]
-    # attach gripper to kuka arm
-    kuka_cid = p.createConstraint(robot.robot_id, 9, kuka_gripper_id, 0, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0.00], [0, 0, 0])
-    #kuka_cid2 = p.createConstraint(kuka_gripper_id, 4, kuka_gripper_id, 6, jointType=p.JOINT_GEAR, jointAxis=[1,1,1], parentFramePosition=[0,0,0], childFramePosition=[0,0,0])
-    #p.changeConstraint(kuka_cid2, gearRatio=-1, erp=0.5, relativePositionTarget=0, maxForce=100)
-    # reset gripper
-    jointPositions = [0.000000, -0.011130, -0.206421, 0.205143, -0.0, 0.000000, -0.0, 0.000000]
-    for jointIndex in range(p.getNumJoints(kuka_gripper_id)):
-        p.resetJointState(kuka_gripper_id, jointIndex, jointPositions[jointIndex])
-        p.setJointMotorControl2(kuka_gripper_id, jointIndex, p.POSITION_CONTROL, jointPositions[jointIndex], 0)
-
-    p.resetBasePositionAndOrientation(kuka_gripper_id, robot.get_eef_pose()[:3], robot.get_eef_pose()[3:])
-    time.sleep(2.0)
-    for _ in range(200):
-        p.stepSimulation()
     pose = [0.4, -0.0, 0.1]
     pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
     pose = np.array(pose)
@@ -246,9 +250,6 @@ if __name__ == "__main__":
     pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
     pose = np.array(pose)
     robot.movep(pose, max_steps=2000)
-
-    p.setJointMotorControl2(kuka_gripper_id, 4, p.POSITION_CONTROL, targetPosition=-0.009, force=100)
-    p.setJointMotorControl2(kuka_gripper_id, 6, p.POSITION_CONTROL, targetPosition=0.0, force=100)
 
     for _ in range(20):
         p.stepSimulation()

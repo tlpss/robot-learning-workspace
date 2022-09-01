@@ -1,4 +1,5 @@
 from fileinput import close
+import time
 import logging
 import math
 from typing import List
@@ -7,15 +8,17 @@ import pybullet_data
 from pybullet_sim.assets.path import get_asset_root_folder
 from pybullet_sim.pybullet_utils import HideOutput
 import math
+import numpy as np
+
 class Gripper():
     open_relative_position = 0.0
     closed_relative_position = 1.0
 
-    def __init__(self, gripper_id, simulate_realtime: bool = True ) -> None:
+    def __init__(self, gripper_id,tcp_offset:np.ndarray, simulate_realtime: bool = True) -> None:
         self.gripper_id = gripper_id
         self.simulate_real_time = simulate_realtime
-
-        self.target_relative_position: float = Gripper.open_relative_position
+        self.tcp_offset = tcp_offset
+        self.target_relative_position = Gripper.open_relative_position
         self.reset()
 
     def reset(self, pose:List[float] = None):
@@ -50,7 +53,7 @@ class Gripper():
         # rather hacky proxy, use with care..
         return abs(self.target_relative_position - self.get_relative_position()) > 0.05
     
-    def attach_to_robot(self, robot_id, robot_link_id):
+    def attach_with_constraint_to_robot(self, robot_id, robot_link_id):
         # create the constraint to attach to the robot frame
         raise NotImplementedError
     def _set_joint_targets(self, target_relative_position:float, max_force: int):
@@ -73,11 +76,12 @@ class Robotiq2F85(Gripper):
     """
     open_position = 0.000
     closed_position = 0.085
+    tcp_offset = np.array([0.0,0.0,0.15])
 
     def __init__(self) -> None:
         gripper_id = p.loadURDF(str(get_asset_root_folder()  / "robotiq2f85" / "robotiq_2f_85.urdf"),useFixedBase=False)
   
-        super().__init__(gripper_id)
+        super().__init__(gripper_id,tcp_offset=Robotiq2F85.tcp_offset)
         self._create_constraints()
 
     def _create_constraints(self):
@@ -117,8 +121,8 @@ class Robotiq2F85(Gripper):
         joint_config = p.getJointState(self.gripper_id, 0)[0]
         return self._joint_angle_to_relative_position(joint_config)
 
-    def attach_to_robot(self, robot_id, robot_link_id):
-        p.createConstraint(robot_id,robot_link_id, gripper.gripper_id, -1, p.JOINT_FIXED, [0, 0, 0.0], [0.0, 0.0, 0], [0, 0,-0.02],childFrameOrientation=p.getQuaternionFromEuler([0,0,1.57]))
+    def attach_with_constraint_to_robot(self, robot_id, robot_link_id):
+        p.createConstraint(robot_id,robot_link_id, self.gripper_id, -1, p.JOINT_FIXED, [0, 0, 0.0], [0.0, 0.0, 0], [0, 0,-0.02],childFrameOrientation=p.getQuaternionFromEuler([0,0,1.57]))
 
 if __name__ == "__main__":
     import time 
@@ -132,20 +136,24 @@ if __name__ == "__main__":
     p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
 
     p.resetDebugVisualizerCamera(cameraDistance=1.8, cameraYaw=0, cameraPitch=-45, cameraTargetPosition=target)
+    gripper1 = Robotiq2F85()
+    robot1 = UR3e(simulate_real_time=True)
 
+    robot2 = UR3e(simulate_real_time=True,robot_base_position=[0.5,0.0,0.0])
+    gripper2 = Robotiq2F85()
 
-    robot = UR3e(simulate_real_time=True)
-    gripper = Robotiq2F85()
-    gripper.reset(robot.get_eef_pose())
     # for i in range(p.getNumJoints(gripper.gripper_id)):
     #     print(p.getJointInfo(gripper.gripper_id, i))
+    gripper1.reset(robot1.get_eef_pose())
+    gripper1.attach_with_constraint_to_robot(robot1.robot_id,robot1.eef_id)
+    
+    gripper2.reset(robot2.get_eef_pose())
+    gripper2.attach_with_constraint_to_robot(robot2.robot_id,robot2.eef_id)
 
-    gripper.attach_to_robot(robot.robot_id,robot.eef_id)
-    gripper.open_gripper()
+    gripper1.close_gripper()
+    gripper2.close_gripper()
 
-    robot.movep([0.2,-0.0,0.3,0,0,0,1],speed=0.001)
-    gripper.close_gripper()
-    gripper.movej(0.6)
+
 
     time.sleep(100)
     p.disconnect()

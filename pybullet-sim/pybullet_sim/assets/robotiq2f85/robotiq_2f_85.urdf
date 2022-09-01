@@ -128,7 +128,7 @@ and adapted (most notably fixed fingertip weights and disabled all collisions ex
       </geometry>
  
     </visual>
-    <!-- <collision>
+    <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
         <box size="0.022 0.00635 0.0375"/>
@@ -136,7 +136,7 @@ and adapted (most notably fixed fingertip weights and disabled all collisions ex
       <material name="">
         <color rgba="0.9 0.0 0.0 1"/>
       </material>
-    </collision> -->
+    </collision>
   </link>
   <joint name="left_inner_knuckle_joint" type="revolute">
     <!-- <origin xyz="0 ${reflect * -0.0127} 0.06142" rpy="${pi / 2 + .725} 0 ${(reflect - 1) * pi / 2}" /> -->
@@ -272,7 +272,7 @@ and adapted (most notably fixed fingertip weights and disabled all collisions ex
       </geometry>
 
     </visual>
-    <!-- <collision>
+    <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
         <box size="0.022 0.00635 0.0375"/>
@@ -280,7 +280,7 @@ and adapted (most notably fixed fingertip weights and disabled all collisions ex
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
       </material>
-    </collision> -->
+    </collision>
   </link>
   <joint name="right_inner_knuckle_joint" type="revolute">
     <!-- <origin xyz="0 ${reflect * -0.0127} 0.06142" rpy="${pi / 2 + .725} 0 ${(reflect - 1) * pi / 2}" /> -->
