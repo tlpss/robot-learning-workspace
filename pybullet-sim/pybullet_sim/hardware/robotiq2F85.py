@@ -30,14 +30,14 @@ class Gripper():
     def close_gripper(self,max_force: int = 100):
         self.movej(Gripper.closed_relative_position, max_force)
 
-    def movej(self, target_relative_position:float, max_force: int = 100, max_steps:int = 400):
+    def movej(self, target_relative_position:float, max_force: int = 100, max_steps:int = 500):
         # bookkeeping
         self.target_relative_position = target_relative_position
 
 
         for _ in range(max_steps):
             current_relative_position = self.get_relative_position()
-            if abs(target_relative_position - current_relative_position) < 1e-2:
+            if abs(target_relative_position - current_relative_position) < 3e-2:
                 return True
             self._set_joint_targets(target_relative_position, max_force)
             p.stepSimulation()
@@ -50,7 +50,7 @@ class Gripper():
 
     def is_object_grasped(self):
         # rather hacky proxy, use with care..
-        return abs(self.target_relative_position - self.get_relative_position()) > 0.1
+        return abs(self.target_relative_position - self.get_relative_position()) > 0.05
     
     def get_relative_position(self):
         raise NotImplementedError
@@ -59,14 +59,13 @@ class Gripper():
 
 class Robotiq2F85(Gripper):
     """
-    the Robotiq grippers proved to be a pain to simulate as they have a closed chain due to their parallel inner and outer knuckles.
+    the Robotiq grippers are a pain to simulate as they have a closed chain due to their parallel inner and outer knuckles.
     Actuating the 6 joints seperately is not recommended as the joints would close faster/slower, resulting in unrealistic grasping. 
-
     In fact all joints on each finger (3/finger) should mimic each other, and so do the 2 fingers, however this resulted in physics instabilities so I 
-    hacked until something worked.
+    hacked until something worked. This is specified in URDF but requires manual constraints in pybullet.
+
+    DUE TO WRONG FINGER TIP WEIGHTS, the physics were very instable.. 
     
-    I attached the outer joint to the finger pad joint, to make sure the pad is vertical at all times.
-    The inner knuckle acuates independently, but has no collision object so this is cosmetic.
     """
     open_position = 0.000
     closed_position = 0.085
@@ -78,7 +77,7 @@ class Robotiq2F85(Gripper):
         self._create_constraints()
 
     def _create_constraints(self):
-        constraint_dict = {5:{7:-1},0: {2:-1}} # attach finger joint to outer knuckle to keep fingertips vertical.
+        constraint_dict = {5:{7:-1,9:1},0: {2:-1,5:1,4:1}} # attach finger joint to outer knuckle to keep fingertips vertical.
         for parent_id, children_dict in constraint_dict.items():
             for joint_id, multiplier in children_dict.items():
                 print(joint_id)
@@ -93,15 +92,15 @@ class Robotiq2F85(Gripper):
     def _set_joint_targets(self, target_relative_position ,max_force):
         open_angle = self._relative_position_to_joint_angle(target_relative_position)
         right_finger_dict = {7:-1,9:1,5:1} # finger and inner knuckle
-        left_finger_dict = {2:-1,4:1,0:1} # finger and inner knuckle
-        for finger_dict in [left_finger_dict,right_finger_dict]:
+        left_finger_dict = {0:1} # finger and inner knuckle
+        for finger_dict in [right_finger_dict, left_finger_dict]:
             for id, direction in finger_dict.items():
-                p.setJointMotorControl2(self.gripper_id, id,p.POSITION_CONTROL,targetPosition=open_angle * direction,force=max_force, maxVelocity=0.8)
+                p.setJointMotorControl2(self.gripper_id, id,p.POSITION_CONTROL,targetPosition=open_angle * direction,force=100, maxVelocity=0.8)
 
     @staticmethod
     def _joint_angle_to_relative_position(angle:float) -> float:
         abs_position = math.sin(0.715-angle) * 0.1143 + 0.01
-        rel_position = abs_position - Robotiq2F85.closed_position / (Robotiq2F85.open_position-Robotiq2F85.closed_position)
+        rel_position = (abs_position - Robotiq2F85.closed_position) / (Robotiq2F85.open_position-Robotiq2F85.closed_position)
         return rel_position
 
     @staticmethod
@@ -119,15 +118,16 @@ class WSG50(Gripper):
     def __init__(self):
         # values taken from https://colab.research.google.com/drive/1eXq-Tl3QKzmbXGSKU2hDk0u_EHdfKVd0?usp=sharing
         # and then adapted
-        open_position = 0.0
-        closed_position = 0.085
+        self.open_position = 0.0
+        self.closed_position = 0.085
+        self.left_pincher_joint_id  = 4
+        self.right_pincher_joint_id = 6
         self.home_joint_positions = [0.000000, -0.011130, -0.206421, 0.205143, -0.0, 0.000000, -0.0, 0.000000]
         with HideOutput():
             gripper_id = p.loadSDF("gripper/wsg50_one_motor_gripper_new_free_base.sdf")[0]
      
-        super().__init__(gripper_id,open_position, closed_position)
-        self.left_pincher_joint_id  = 4
-        self.right_pincher_joint_id = 6
+        super().__init__(gripper_id)
+
 
     
     def reset(self, pose=None):
@@ -137,19 +137,22 @@ class WSG50(Gripper):
         super().reset(pose)
 
 
-    def _set_joint_targets(self, position, max_force):
+    def _set_joint_targets(self, relative_osition, max_force):
+        position = self.closed_position + (self.open_position - self.closed_position) * relative_osition
         for id in [self.left_pincher_joint_id, self.right_pincher_joint_id]:
             p.setJointMotorControl2(self.gripper_id,id, p.POSITION_CONTROL, targetPosition=position, maxVelocity=0.5, force=max_force)
 
-
-
+    def get_relative_position(self):
+        abs_position = p.getJointState(self.gripper_id, self.left_pincher_joint_id)[0]
+        rel_position = (abs_position - Robotiq2F85.closed_position) / (Robotiq2F85.open_position-Robotiq2F85.closed_position)
+        return rel_position
 
 if __name__ == "__main__":
     import time 
     from pybullet_sim.hardware.ur3e import UR3e
     physicsClient = p.connect(p.GUI)  # or p.DIRECT for non-graphical version
     p.setAdditionalSearchPath(pybullet_data.getDataPath())  # optionally
-    #p.setGravity(0, 0, -10)
+    p.setGravity(0, 0, -10)
     tableId = p.loadURDF(str(get_asset_root_folder() / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
 
     target = p.getDebugVisualizerCamera()[11]
@@ -161,16 +164,17 @@ if __name__ == "__main__":
     robot = UR3e(simulate_real_time=True)
     gripper = Robotiq2F85()
     gripper.reset(robot.get_eef_pose())
-    for i in range(p.getNumJoints(gripper.gripper_id)):
-        print(p.getJointInfo(gripper.gripper_id, i))
+    # for i in range(p.getNumJoints(gripper.gripper_id)):
+    #     print(p.getJointInfo(gripper.gripper_id, i))
 
-    kuka_cid = p.createConstraint(robot.robot_id,robot.eef_id, gripper.gripper_id, -1, p.JOINT_FIXED, [0, 0, 0.0], [0.0, 0.0, 0], [0, 0,0],childFrameOrientation=p.getQuaternionFromEuler([0,0,1.57]))
-    gripper.movej(1.0)
+    kuka_cid = p.createConstraint(robot.robot_id,robot.eef_id, gripper.gripper_id, -1, p.JOINT_FIXED, [0, 0, 0.0], [0.0, 0.0, 0], [0, 0,-0.02],childFrameOrientation=p.getQuaternionFromEuler([0,0,1.57]))
+    gripper.close_gripper()
 
-    robot.movep([0.2,-0.0,0.2,0,0,0,1],speed=0.001)
+    robot.movep([0.2,-0.0,0.3,0,0,0,1],speed=0.001)
     gripper.movej(0.6)
-    gripper.movej(1.0)
-    gripper.movej(0.0)
+    print(gripper.get_relative_position())
+    gripper.close_gripper()
+    gripper.open_gripper()
 
     time.sleep(100)
     p.disconnect()
