@@ -126,9 +126,9 @@ class UR3ePush(gym.Env):
             self.initial_eef_pose[:3] = self._get_random_eef_position()
         
         self.gripper = Robotiq2F85()
-        self.gripper.close_gripper()
         self.robot = UR3e(eef_start_pose=self.initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_real_time)
-
+        # only close gripper AFTER it was attached to robot! pybullet does weird stuff if you don't.
+        self.gripper.close_gripper()
         self.initial_object_position[:2] = self.get_random_object_position(np.array(self.target_position[:2]))
         self.disc_id = p.loadURDF(
             str(self.asset_path / "cylinder" / "1:2cylinder.urdf"), self.initial_object_position, globalScaling=0.1
@@ -473,7 +473,7 @@ class UR3ePush(gym.Env):
             z = np.random.random() * 0.2
             position = np.array([x, y, z])
             logging.debug(f"proposed eef reset {position}")
-            if UR3ePush._position_is_in_workspace(position) and np.linalg.norm(position) < 0.3: # check if reachable by robot.
+            if UR3ePush._position_is_in_workspace(position):
 
                 return position
 

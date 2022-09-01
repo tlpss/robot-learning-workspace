@@ -88,7 +88,6 @@ class Robotiq2F85(Gripper):
         constraint_dict = {5:{7:-1,9:1},0: {2:-1,5:1,4:1}} # attach finger joint to outer knuckle to keep fingertips vertical.
         for parent_id, children_dict in constraint_dict.items():
             for joint_id, multiplier in children_dict.items():
-                print(joint_id)
                 c = p.createConstraint(self.gripper_id, parent_id,
                                     self.gripper_id, joint_id,
                                     jointType=p.JOINT_GEAR,
@@ -99,8 +98,12 @@ class Robotiq2F85(Gripper):
             
     def _set_joint_targets(self, target_relative_position ,max_force):
         open_angle = self._relative_position_to_joint_angle(target_relative_position)
-        right_finger_dict = {7:-1,9:1,5:1} # finger and inner knuckle
-        left_finger_dict = {0:1} # finger and inner knuckle
+
+        # still actuate all joints to improve stability? (weird pybullet behavior if you don't)
+        # thanks to constraints they will still be more or less in sync.
+
+        right_finger_dict = {7:-1,9:1,5:1} 
+        left_finger_dict = {0:1,2:-1,4:1} 
         for finger_dict in [right_finger_dict, left_finger_dict]:
             for id, direction in finger_dict.items():
                 p.setJointMotorControl2(self.gripper_id, id,p.POSITION_CONTROL,targetPosition=open_angle * direction,force=100, maxVelocity=0.8)
@@ -125,7 +128,6 @@ class Robotiq2F85(Gripper):
         p.createConstraint(robot_id,robot_link_id, self.gripper_id, -1, p.JOINT_FIXED, [0, 0, 0.0], [0.0, 0.0, 0], [0, 0,-0.02],childFrameOrientation=p.getQuaternionFromEuler([0,0,1.57]))
 
 if __name__ == "__main__":
-    import time 
     from pybullet_sim.hardware.ur3e import UR3e
     physicsClient = p.connect(p.GUI)  # or p.DIRECT for non-graphical version
     p.setAdditionalSearchPath(pybullet_data.getDataPath())  # optionally
@@ -139,21 +141,25 @@ if __name__ == "__main__":
     gripper1 = Robotiq2F85()
     robot1 = UR3e(simulate_real_time=True)
 
-    robot2 = UR3e(simulate_real_time=True,robot_base_position=[0.5,0.0,0.0])
+
     gripper2 = Robotiq2F85()
+    robot2 = UR3e(simulate_real_time=True,robot_base_position=[0.5,0.0,0.0],gripper=gripper2)
 
     # for i in range(p.getNumJoints(gripper.gripper_id)):
     #     print(p.getJointInfo(gripper.gripper_id, i))
     gripper1.reset(robot1.get_eef_pose())
     gripper1.attach_with_constraint_to_robot(robot1.robot_id,robot1.eef_id)
     
-    gripper2.reset(robot2.get_eef_pose())
-    gripper2.attach_with_constraint_to_robot(robot2.robot_id,robot2.eef_id)
+    # gripper2.reset(robot2.get_eef_pose())
+    # gripper2.attach_with_constraint_to_robot(robot2.robot_id,robot2.eef_id)
 
     gripper1.close_gripper()
     gripper2.close_gripper()
 
+    robot1.movep([0.2,-0.2,0.2,1,0,0,0],speed=0.001)
+    gripper1.open_gripper()
 
-
+    robot2.movep([0.2,-0.2,0.2,1,0,0,0],speed=0.001) #TODO: fix bug w/ base_position for robots.
+    gripper2.open_gripper()
     time.sleep(100)
     p.disconnect()
