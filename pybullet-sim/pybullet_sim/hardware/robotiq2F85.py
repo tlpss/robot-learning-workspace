@@ -30,7 +30,7 @@ class Gripper():
     def close_gripper(self,max_force: int = 100):
         self.movej(Gripper.closed_relative_position, max_force)
 
-    def movej(self, target_relative_position:float, max_force: int = 100, max_steps:int = 200):
+    def movej(self, target_relative_position:float, max_force: int = 100, max_steps:int = 400):
         # bookkeeping
         self.target_relative_position = target_relative_position
 
@@ -43,9 +43,9 @@ class Gripper():
             p.stepSimulation()
             if self.simulate_real_time:
                 time.sleep(1.0 / 240)
-        logging.debug(f"Warning: movej exceeded {max_steps} simulation steps for {self.__class__}. Skipping.")
+        print(f"Warning: movej exceeded {max_steps} simulation steps for {self.__class__}. Skipping.")
         
-    def _set_joint_targets(self, target_relative_position:float, max_force: int,max_steps: int = 100):
+    def _set_joint_targets(self, target_relative_position:float, max_force: int):
         raise NotImplementedError
 
     def is_object_grasped(self):
@@ -96,7 +96,7 @@ class Robotiq2F85(Gripper):
         left_finger_dict = {2:-1,4:1,0:1} # finger and inner knuckle
         for finger_dict in [left_finger_dict,right_finger_dict]:
             for id, direction in finger_dict.items():
-                p.setJointMotorControl2(self.gripper_id, id,p.POSITION_CONTROL,targetPosition=open_angle * direction,force=max_force, maxVelocity=0.5)
+                p.setJointMotorControl2(self.gripper_id, id,p.POSITION_CONTROL,targetPosition=open_angle * direction,force=max_force, maxVelocity=0.8)
 
     @staticmethod
     def _joint_angle_to_relative_position(angle:float) -> float:
@@ -165,12 +165,12 @@ if __name__ == "__main__":
         print(p.getJointInfo(gripper.gripper_id, i))
 
     kuka_cid = p.createConstraint(robot.robot_id,robot.eef_id, gripper.gripper_id, -1, p.JOINT_FIXED, [0, 0, 0.0], [0.0, 0.0, 0], [0, 0,0],childFrameOrientation=p.getQuaternionFromEuler([0,0,1.57]))
-    gripper.movej(1.0,max_steps= 500)
+    gripper.movej(1.0)
 
     robot.movep([0.2,-0.0,0.2,0,0,0,1],speed=0.001)
-    gripper.movej(0.6,max_steps=500)
-    gripper.movej(1.0,max_steps=500)
-    gripper.movej(0.0,max_steps=500)
+    gripper.movej(0.6)
+    gripper.movej(1.0)
+    gripper.movej(0.0)
 
     time.sleep(100)
     p.disconnect()
