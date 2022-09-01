@@ -13,6 +13,7 @@ from pybullet_sim.assets.path import get_asset_root_folder
 from pybullet_sim.demonstrations import Demonstration, save_visual_demonstrations
 from pybullet_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
 from pybullet_sim.hardware.ur3e import UR3e
+from pybullet_sim.hardware.robotiq2F85 import Robotiq2F85
 from pybullet_sim.hardware.zed2i import Zed2i
 
 
@@ -34,7 +35,6 @@ class UR3ePush(gym.Env):
     state observations:
     standard:
     """
-
     goal_l2_margin = 0.05
     primitive_max_push_distance = 0.15
     primitive_robot_eef_z = 0.02
@@ -65,6 +65,7 @@ class UR3ePush(gym.Env):
 
         self.plane_id = None
         self.robot = None
+        self.gripper = None
         self.table_id = None
         self.disc_id = None
         self.target_id = None
@@ -118,13 +119,16 @@ class UR3ePush(gym.Env):
         self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         if self.use_push_primitive:
             self.initial_eef_pose[:3] = UR3ePush.primitive_home_pose
-        # todo: surpress pybullet output during loading of URDFs.. (see pybullet_planning repo)
         else:
             # get random positions as this improves exploration and robustness of the learned policies.
             # exploration as it will spawn close to the object every now and then, robustness as it will have to learn
             # to deal with arbitrary start positions.
             self.initial_eef_pose[:3] = self._get_random_eef_position()
-        self.robot = UR3e(eef_start_pose=self.initial_eef_pose, simulate_real_time=self.simulate_real_time)
+        
+        self.gripper = Robotiq2F85()
+        self.gripper.close_gripper()
+        self.robot = UR3e(eef_start_pose=self.initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_real_time)
+
         self.initial_object_position[:2] = self.get_random_object_position(np.array(self.target_position[:2]))
         self.disc_id = p.loadURDF(
             str(self.asset_path / "cylinder" / "1:2cylinder.urdf"), self.initial_object_position, globalScaling=0.1
@@ -291,6 +295,7 @@ class UR3ePush(gym.Env):
 
         eef_target_position[0:3] = position
         eef_target_position = self._clip_target_position(eef_target_position)
+
         logging.debug(f"target EEF pose = {eef_target_position.tolist()[:3]}")
 
         self.robot.movep(eef_target_position, speed=speed, max_steps=max_steps)
