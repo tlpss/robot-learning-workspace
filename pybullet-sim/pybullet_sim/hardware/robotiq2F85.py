@@ -23,17 +23,17 @@ class Gripper():
 
     def reset(self, pose:List[float] = None):
         self.target_relative_position = Gripper.open_relative_position
-        self._set_joint_targets(self.target_relative_position, max_force=100)
+        self._set_joint_targets(self.target_relative_position, max_force=20)
         if pose is not None:
             p.resetBasePositionAndOrientation(self.gripper_id, pose[:3], pose[3:])
 
-    def open_gripper(self,max_force: int = 100):
+    def open_gripper(self,max_force: int = 20):
         self.movej(Gripper.open_relative_position,max_force)
     
-    def close_gripper(self,max_force: int = 100):
+    def close_gripper(self,max_force: int = 20):
         self.movej(Gripper.closed_relative_position, max_force)
 
-    def movej(self, target_relative_position:float, max_force: int = 100, max_steps:int = 250):
+    def movej(self, target_relative_position:float, max_force: int = 20, max_steps:int = 250):
         # bookkeeping
         self.target_relative_position = target_relative_position
 

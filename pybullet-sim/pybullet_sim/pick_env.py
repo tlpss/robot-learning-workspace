@@ -6,7 +6,7 @@ import pybullet_data
 import gym 
 from pybullet_sim.assets.path import get_asset_root_folder
 from pybullet_sim.hardware.ur3e import UR3e
-from pybullet_sim.hardware.robotiq2F85 import Robotiq2F85
+from pybullet_sim.hardware.robotiq2F85 import WSG50, Robotiq2F85
 from pybullet_sim.hardware.zed2i import Zed2i
 import numpy as np 
 import random 
@@ -26,7 +26,7 @@ class UR3ePick(gym.Env):
         self.current_episode_duration = 0
 
         # randomization of poses
-        n_objects = 1
+        n_objects = 30
         colors =[(1,1,1,1),(1,1,0,1),(1,0,0,1),(0,1,0,1),(0,0,1,1),(0,1,1,1),(1,0,1,1)]
         object_config_dict = [{"path": str(self.asset_path/ "cylinder" / "1:2cylinder.urdf"), "scale":(0.03,0.05)}]
         initial_eef_pose = [0.2,-0.2,0.2,1,0,0,0]
@@ -48,7 +48,7 @@ class UR3ePick(gym.Env):
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -1.0])
         self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         self.basket_id = p.loadURDF("tray/tray.urdf",[0.4,-0.2,0.01],[0,0,1,0],globalScaling=0.6,useFixedBase=True)
-        self.gripper = Robotiq2F85()
+        self.gripper = WSG50() # DON'T USE ROBOTIQ! physics are not stable..
         self.robot = UR3e(eef_start_pose=initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_realtime)
 
         self.object_ids = []
@@ -70,7 +70,13 @@ class UR3ePick(gym.Env):
         if self.use_motion_primitive:
             self.execute_pick_primitive(action)
 
+        # check if object was grasped
 
+        # if grasped, set flag, 
+        # deal with object
+        # move to bin (only visually pleasing?)
+
+        #TODO: check how other repos deal with this.
 
     def execute_pick_primitive(self, grasp_position: np.ndarray):
         pregrasp_position = np.copy(grasp_position)
@@ -79,13 +85,8 @@ class UR3ePick(gym.Env):
         self.gripper.open_gripper()
         self._move_robot(pregrasp_position)
         self._move_robot(grasp_position)
-        self.gripper.close_gripper(max_force=100)
+        self.gripper.close_gripper(max_force=10)
         self._move_robot(pregrasp_position)
-
-        # check if object was grasped
-
-        # if grasped, set flag
-        # move to bin
 
     def _move_robot(self, position: np.array, speed=0.001, max_steps=1000):
 
@@ -109,7 +110,7 @@ class UR3ePick(gym.Env):
         # get position of that object
         heighest_object_position = p.getBasePositionAndOrientation(self.object_ids[heightest_object_id])[0]
         heighest_object_position = np.array(heighest_object_position)
-        heighest_object_position[2] -= 0.005 # firmer grasp
+        heighest_object_position[2] -= 0.001 # firmer grasp
         return heighest_object_position
 
     @staticmethod
