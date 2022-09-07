@@ -24,18 +24,23 @@ class Zed2i:
     z_range = (0.25, 3)
     hw_image_size = (1920,1080)
     hw_focal_length_in_pixels = 1000
-    vertical_fov = np.arctan(hw_image_size[1] / 2 / hw_focal_length_in_pixels) * 2  # pinhole 
-    vertical_fov_degrees = vertical_fov * 180 / np.pi
+    hw_vertical_fov = np.arctan(hw_image_size[1] / 2 / hw_focal_length_in_pixels) * 2  # pinhole 
+    hw_vertical_fov_degrees = hw_vertical_fov * 180 / np.pi
 
     def __init__(self, eye_position, image_size=(1920,1080), vertical_fov_degrees = 56.0, target_position=None):
-        assert self.vertical_fov_degrees <= Zed2i.vertical_fov_degrees, "fov cannot exceed the HW FOV.."
+        assert vertical_fov_degrees <= Zed2i.hw_vertical_fov_degrees, "fov cannot exceed the HW FOV.."
         
         self.vertical_fov_degrees = vertical_fov_degrees
         self.image_size = image_size
         self.eye_position = eye_position
         self.target_position = target_position if target_position is not None else [0, 0, 0]
-
+        self.intrinsics_matrix = self._get_instrinsics_matrix()
         self.projection_matrix, self.view_matrix = self._get_camera_matrices()
+
+        # convention here: extrinsics == camera pose in world frame aka the transform from camera to world.
+        # convert from OpenGL viewmatrix (effective image plane instead of conventional virtual image plane, obtained by rotating around camera )
+        # openGL also stores column-major.. so transpose, then rotate around Y-axis and then invert (as OpenGL uses world to camera extrinsics)
+        self.extrinsics_matrix = np.linalg.inv(np.array([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]) @ np.array(self.view_matrix).reshape(4,4).transpose())
 
     
 
@@ -66,6 +71,17 @@ class Zed2i:
         # Get segmentation image.
         segmentation = np.uint8(segmentation).reshape(depth_image_size)
         return rgb, depth, segmentation
+
+    def _get_instrinsics_matrix(self):
+        focal_in_pixels = self.image_size[1]/2/ np.tan(np.deg2rad(self.vertical_fov_degrees)/2)
+        intrinsics = np.zeros((3,3))
+        intrinsics[0,0] = focal_in_pixels
+        intrinsics[1,1] = focal_in_pixels
+        intrinsics[2,2] = 1.0
+        intrinsics[0,2] = self.image_size[0] / 2
+        intrinsics[1,2] = self.image_size[1] / 2
+        return intrinsics
+    
 
     def _get_camera_matrices(self):
         """
@@ -143,15 +159,22 @@ def explore_camera_output():
     p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
     p.loadURDF("cube.urdf", [0, 0, 0.04], globalScaling=0.1)
 
-    cam = Zed2i([0, -0.3001, 1], image_size=(100,100),vertical_fov_degrees=30,target_position=[0, 0.1, 0])
+    cam = Zed2i([0, -0.31, 1.0001], image_size=(100,100),vertical_fov_degrees=56,target_position=[0, -0.2, 0.0])
+    
+    # geht pixel coords of origin and manually verify on the image!
+    img_point=   np.linalg.inv(cam.extrinsics_matrix) @ np.array([0,0,0.04,1])
+    print(f"{img_point=}")
+    coordinate = cam.intrinsics_matrix @ img_point[:3]
+    print(f"{coordinate=}")
     img, depth, segm = cam.get_image()
     plt.imshow(img)
     plt.show()
-    plt.imshow(depth)
-    plt.show()
-    plt.imshow(segm)
-    plt.show()
-    time.sleep(20)
+    # plt.imshow(depth)
+    # plt.show()
+    # plt.imshow(segm)
+    # plt.show()
+    # time.sleep(20)
+    print(cam.extrinsics_matrix)
 
 
 if __name__ == "__main__":

@@ -32,17 +32,20 @@ class UR3ePick(gym.Env):
     pick_workspace_y_range = (-0.45,-0.2)
 
 
-    def __init__(self, use_motion_primitive=True, simulate_realtime=True, object_config: ObjectConfig = None) -> None:
+    def __init__(self, use_spatial_action_map = False, use_motion_primitive=True, simulate_realtime=True, object_config: ObjectConfig = None) -> None:
         self.simulate_realtime = simulate_realtime
         self.use_motion_primitive = use_motion_primitive
+        self.use_spatial_action_map = use_spatial_action_map
 
         if not self.use_motion_primitive:
+            assert not self.use_spatial_action_map # can only use spatial action maps with 
             raise NotImplementedError
         if object_config is None:
             self.object_config = ObjectConfig()
 
         # camera on part of the workspace that is reachable and does not have the robot or bin in view
-        self.camera = Zed2i([0, -0.301, 0.4], image_size=UR3ePick.image_dimensions, target_position=[0, -0.3, 0])
+        # make camera high and very small fov, to approximate an orthographic view (Andy Zeng uses orthographic reprojection through point cloud)
+        self.camera = Zed2i([0, -0.301, 1.5],vertical_fov_degrees=17, image_size=UR3ePick.image_dimensions, target_position=[0, -0.3, 0])
         
     
         self.current_episode_duration = 0
@@ -98,6 +101,9 @@ class UR3ePick(gym.Env):
         self.current_episode_duration += 1
 
         if self.use_motion_primitive:
+            if self.use_spatial_action_map:
+                # convert (u,v,k) to (x,y,z,theta)
+                raise NotImplementedError
             self.execute_pick_primitive(action)
 
         # check if object was grasped
@@ -191,6 +197,16 @@ class UR3ePick(gym.Env):
         self._move_robot(drop_position)
         self.gripper.open_gripper()
 
+    def _image_coords_to_world(self,u:int, v:int, depth_map:np.ndarray) -> np.ndarray:
+        img_coords = np.array([u,v,1.0])
+        ray_in_camera_frame = np.linalg.inv(self.camera.intrinsics_matrix )@ img_coords
+        z_in_camera_frame = depth_map[u,v]
+        t = z_in_camera_frame / ray_in_camera_frame[2]
+        position_in_camera_frame = t* ray_in_camera_frame
+
+        position_in_world_frame = (self.camera.extrinsics_matrix @ np.concatenate([position_in_camera_frame,np.ones((1,))]))[:3]
+        return position_in_world_frame
+
 
     @staticmethod
     def _get_object_heights(object_ids: List) -> List[float]:
@@ -205,11 +221,22 @@ class UR3ePick(gym.Env):
 
 if __name__ == "__main__":
     import time
+    import matplotlib.pyplot as plt
     logging.basicConfig(level=logging.DEBUG)
 
     env = UR3ePick()
     obs = env.reset()
     done = False
     while not done:
-        obs, reward, done , _ = env.step(env.get_oracle_action())
+        # plt.imshow(obs[:,:,:3])
+        # plt.show()
+        # plt.imshow(obs[:,:,-1])
+        # plt.show()
+        # u = int(input("u"))
+        # v= int(input("v"))
+        # position = env._image_coords_to_world(u,v,obs[:,:,-1])
+        # print(position)
+        # obs, reward, done , _ = env.step(np.concatenate([position,np.zeros((1,))]))
+        obs, reward, done ,_ = env.step(env.get_oracle_action())
+
     time.sleep(30)
