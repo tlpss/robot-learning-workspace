@@ -88,13 +88,13 @@ class UR3ePick(gym.Env):
             id =p.loadURDF(object_type["path"],position, globalScaling=scale)
             p.changeVisualShape(id, -1, rgbaColor=random.choice(self.object_config.colors))
             p.changeDynamics(id,-1,lateralFriction=5.0)
-            
+            self.object_ids.append(id)
+
         if self.simulate_realtime:
             enable_debug_rendering()
 
             for _ in range(200):
                 p.stepSimulation()
-            self.object_ids.append(id)
         return self.get_current_observation()
 
     def step(self, action: np.ndarray):
