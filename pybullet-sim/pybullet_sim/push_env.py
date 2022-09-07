@@ -13,7 +13,7 @@ from pybullet_sim.assets.path import get_asset_root_folder
 from pybullet_sim.demonstrations import Demonstration, save_visual_demonstrations
 from pybullet_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering
 from pybullet_sim.hardware.ur3e import UR3e
-from pybullet_sim.hardware.robotiq2F85 import Robotiq2F85
+from pybullet_sim.hardware.robotiq2F85 import WSG50, Robotiq2F85
 from pybullet_sim.hardware.zed2i import Zed2i
 
 
@@ -125,7 +125,7 @@ class UR3ePush(gym.Env):
             # to deal with arbitrary start positions.
             self.initial_eef_pose[:3] = self._get_random_eef_position()
         
-        self.gripper = Robotiq2F85()
+        self.gripper = WSG50()
         self.robot = UR3e(eef_start_pose=self.initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_real_time)
         # only close gripper AFTER it was attached to robot! pybullet does weird stuff if you don't.
         self.gripper.close_gripper()
@@ -167,10 +167,6 @@ class UR3ePush(gym.Env):
             return obs
         else:
             rgb, depth, _ = self.camera.get_image()
-
-            rgb = Image.fromarray(rgb)
-            rgb = np.array(rgb)
-
             return rgb
 
     def _reward(self) -> float:

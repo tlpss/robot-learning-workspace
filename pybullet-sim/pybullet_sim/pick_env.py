@@ -1,4 +1,6 @@
 from abc import abstractmethod
+from dataclasses import dataclass
+import dataclasses
 import logging
 from typing import List
 import pybullet as p
@@ -9,14 +11,42 @@ from pybullet_sim.hardware.ur3e import UR3e
 from pybullet_sim.hardware.robotiq2F85 import WSG50, Robotiq2F85
 from pybullet_sim.hardware.zed2i import Zed2i
 import numpy as np 
-import random 
+import random
+
+from pybullet_sim.pybullet_utils import disable_debug_rendering, enable_debug_rendering 
+
+ASSET_PATH = get_asset_root_folder()
+
+@dataclasses.dataclass
+class ObjectConfig:
+    
+    n_objects = 5
+    colors =[(1,1,1,1),(1,1,0,1),(1,0,0,1),(0,1,0,1),(0,0,1,1),(0,1,1,1),(1,0,1,1)]
+    object_list= [{"path": str(ASSET_PATH/ "cylinder" / "1:2cylinder.urdf"), "scale":(0.03,0.05)}]
 
 class UR3ePick(gym.Env):
-    def __init__(self, use_state_observation=False, use_motion_primitive=True, simulate_realtime=True) -> None:
-        self.asset_path = get_asset_root_folder()
+    image_dimensions = (256,256)
+
+    initial_eef_pose = [0.4, 0.1,0.2,1,0,0,0] # robot should be out of view.
+    pick_workspace_x_range = (-0.2,0.15)
+    pick_workspace_y_range = (-0.45,-0.2)
+
+
+    def __init__(self, use_motion_primitive=True, simulate_realtime=True, object_config: ObjectConfig = None) -> None:
         self.simulate_realtime = simulate_realtime
         self.use_motion_primitive = use_motion_primitive
-        self.use_state_observation = use_state_observation
+
+        if not self.use_motion_primitive:
+            raise NotImplementedError
+        if object_config is None:
+            self.object_config = ObjectConfig()
+
+        # camera on part of the workspace that is reachable and does not have the robot or bin in view
+        self.camera = Zed2i([0, -0.301, 0.4], image_size=UR3ePick.image_dimensions, target_position=[0, -0.3, 0])
+        
+    
+        self.current_episode_duration = 0
+        self.max_episode_duration = 2*self.object_config.n_objects
 
 
         super().__init__()
@@ -25,74 +55,104 @@ class UR3ePick(gym.Env):
         # bookkeeping (should be in the "Task" as it is about the logic of the MDP)
         self.current_episode_duration = 0
 
-        # randomization of poses
-        n_objects = 30
-        colors =[(1,1,1,1),(1,1,0,1),(1,0,0,1),(0,1,0,1),(0,0,1,1),(0,1,1,1),(1,0,1,1)]
-        object_config_dict = [{"path": str(self.asset_path/ "cylinder" / "1:2cylinder.urdf"), "scale":(0.03,0.05)}]
-        initial_eef_pose = [0.2,-0.2,0.2,1,0,0,0]
-
-
         # creation of the environment
         if p.isConnected():
             p.resetSimulation()
         else:
             # initialize pybullet
             p.connect(p.GUI)  # or p.DIRECT for non-graphical version
+        disable_debug_rendering()  # will do nothing if not enabled.
 
         p.setAdditionalSearchPath(pybullet_data.getDataPath())  # optionally
-        p.setGravity(0, 0, -1)        
+        p.setGravity(0, 0, -2) # makes life easier..
         p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
-        # p.configureDebugVisualizer(p.COV_ENABLE_WIREFRAME, 1) # collision shapes
-
+        
+        
         p.resetDebugVisualizerCamera(cameraDistance=1.8, cameraYaw=0, cameraPitch=-45, cameraTargetPosition=[0, 0, 0])
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -1.0])
-        self.table_id = p.loadURDF(str(self.asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
+        self.table_id = p.loadURDF(str(ASSET_PATH / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         self.basket_id = p.loadURDF("tray/tray.urdf",[0.4,-0.2,0.01],[0,0,1,0],globalScaling=0.6,useFixedBase=True)
         self.gripper = WSG50() # DON'T USE ROBOTIQ! physics are not stable..
-        self.robot = UR3e(eef_start_pose=initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_realtime)
+        self.robot = UR3e(eef_start_pose=UR3ePick.initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_realtime)
 
         self.object_ids = []
-        for i in range(n_objects):
-            object_type = random.choice(object_config_dict)
+        for i in range(self.object_config.n_objects):
+            object_type = random.choice(self.object_config.object_list)
             scale = np.random.uniform(object_type["scale"][0],object_type["scale"][1])
             position = [0,0,0.1]
-            position[0] = np.random.uniform(-0.2,0.15)
-            position[1] = np.random.uniform(-0.45,-0.2)
+            position[0] = np.random.uniform(UR3ePick.pick_workspace_x_range[0],UR3ePick.pick_workspace_x_range[1])
+            position[1] = np.random.uniform(UR3ePick.pick_workspace_y_range[0], UR3ePick.pick_workspace_y_range[1])
             id =p.loadURDF(object_type["path"],position, globalScaling=scale)
-            p.changeVisualShape(id, -1, rgbaColor=random.choice(colors))
+            p.changeVisualShape(id, -1, rgbaColor=random.choice(self.object_config.colors))
             p.changeDynamics(id,-1,lateralFriction=5.0)
             
+        if self.simulate_realtime:
+            enable_debug_rendering()
+
             for _ in range(200):
                 p.stepSimulation()
             self.object_ids.append(id)
+        return self.get_current_observation()
 
     def step(self, action: np.ndarray):
+        self.current_episode_duration += 1
+
         if self.use_motion_primitive:
             self.execute_pick_primitive(action)
 
         # check if object was grasped
+        success = self._is_grasp_succesfull()
+        reward = self._reward()
+        done = self._done()
+        logging.debug(f"grasp succes = {success}")
 
-        # if grasped, set flag, 
-        # deal with object
-        # move to bin (only visually pleasing?)
+        if success:
+            # move to bin (only visually pleasing?) and 
+            # remove object from list.
+            self.object_ids.remove(self._get_lifted_object_id())
+            self._drop_in_bin()
+        # move robot back to initial pose
+        self._move_robot(UR3ePick.initial_eef_pose[:3],speed=0.005)
 
-        #TODO: check how other repos deal with this.
+        new_observation = self.get_current_observation()
+        return new_observation, reward, done, {}
 
-    def execute_pick_primitive(self, grasp_position: np.ndarray):
+    def get_current_observation(self):
+        rgb, depth, _ = self.camera.get_image()
+        return np.concatenate([rgb,depth[:,:,np.newaxis]],axis=-1)
+
+    def execute_pick_primitive(self, grasp_pose: np.ndarray):
+
+        grasp_position = grasp_pose[:3]
+
+        if np.linalg.norm(grasp_position) > 0.45:
+            logging.info(f"grasp position was not reachable {grasp_position}")
+            return 
+        grasp_orientation = grasp_pose[3]
         pregrasp_position = np.copy(grasp_position)
-        pregrasp_position[2] += 0.12
+        pregrasp_position[2] += 0.15
 
         self.gripper.open_gripper()
-        self._move_robot(pregrasp_position)
-        self._move_robot(grasp_position)
-        self.gripper.close_gripper(max_force=10)
+        self._move_robot(pregrasp_position,grasp_orientation,speed=0.005)
+        self._move_robot(grasp_position,grasp_orientation)
+        self.gripper.close_gripper(max_force=50)
         self._move_robot(pregrasp_position)
 
-    def _move_robot(self, position: np.array, speed=0.001, max_steps=1000):
+
+    def _reward(self) -> float:
+        if self.use_motion_primitive:
+            return self._is_grasp_succesfull()
+    def _done(self):
+        # no attempt to verify if all objects are still reachable..
+        # TODO: fix!
+        done = len(self.object_ids) == 0
+        done = done or self.current_episode_duration >= self.max_episode_duration
+        return done 
+
+    def _move_robot(self, position: np.array, gripper_z_orientation:float = 0.0, speed=0.001, max_steps=1000):
 
         eef_target_position = np.zeros(7)
-        eef_target_position[3] = 1.0  # quaternion top-down eef orientation
-
+        eef_target_position[3:] = p.getQuaternionFromEuler([np.pi,0.,gripper_z_orientation])
         eef_target_position[0:3] = position
         #eef_target_position = self._clip_target_position(eef_target_position)
 
@@ -102,16 +162,35 @@ class UR3ePick(gym.Env):
 
     def get_oracle_action(self):
         if self.use_motion_primitive:
-            return self._oracle_get_pick_position()
+            return self._oracle_get_pick_pose()
         
-    def _oracle_get_pick_position(self) -> np.ndarray:
+    def _oracle_get_pick_pose(self) -> np.ndarray:
         # get heighest object from list
         heightest_object_id = np.argmax(np.array(self._get_object_heights(self.object_ids)))
         # get position of that object
         heighest_object_position = p.getBasePositionAndOrientation(self.object_ids[heightest_object_id])[0]
         heighest_object_position = np.array(heighest_object_position)
         heighest_object_position[2] -= 0.001 # firmer grasp
-        return heighest_object_position
+        pick_pose = np.concatenate([heighest_object_position, np.random.rand(1) * np.pi])
+        return pick_pose
+
+    def _is_grasp_succesfull(self):
+        return self.gripper.get_relative_position() < 0.95 and max(self._get_object_heights(self.object_ids)) > 0.1
+
+    def _get_lifted_object_id(self):
+        """heuristic for lifted object ID -> get the object that is heighest at that moment (assumes the gripper is lifted)
+        """
+        assert self._is_grasp_succesfull()
+        heightest_object_index = np.argmax(np.array(self._get_object_heights(self.object_ids)))
+        return self.object_ids[heightest_object_index]
+
+
+    def _drop_in_bin(self):
+        bin_posisition = p.getBasePositionAndOrientation(self.basket_id)[0]
+        drop_position = np.array(bin_posisition) + np.array([0,0,0.15])
+        self._move_robot(drop_position)
+        self.gripper.open_gripper()
+
 
     @staticmethod
     def _get_object_heights(object_ids: List) -> List[float]:
@@ -126,7 +205,11 @@ class UR3ePick(gym.Env):
 
 if __name__ == "__main__":
     import time
+    logging.basicConfig(level=logging.DEBUG)
+
     env = UR3ePick()
-    env.reset()
-    env.step(env.get_oracle_action())
+    obs = env.reset()
+    done = False
+    while not done:
+        obs, reward, done , _ = env.step(env.get_oracle_action())
     time.sleep(30)

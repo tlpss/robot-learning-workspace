@@ -21,7 +21,7 @@ class UR3e:
 
     def __init__(self, robot_base_position=None,eef_start_pose=None,gripper: Gripper= None, simulate_real_time=False):
         self.simulate_real_time = simulate_real_time
-        self.homej = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi
+        self.homej = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, -0.5]) * np.pi
 
         if robot_base_position is None:
             self.robot_base_position = [0, 0, 0]
@@ -144,10 +144,6 @@ class UR3e:
 
     def solve_ik_ikfast(self, pose: np.ndarray) -> np.ndarray:
         p = np.copy(pose)
-        w = pose[-1]
-        p[4:] = pose[3:6]
-        p[3] = w
-
         #to get robot tooltip pose:
         # get TCP offset
         # compute the offset along the pose orientation -> subtract from position
@@ -160,8 +156,8 @@ class UR3e:
             # fix for axis-aligned orientations (which is often used in e.g. top-down EEF orientations
             # add random noise to the EEF orienation to avoid axis-alignment
             # see https://github.com/cambel/ur_ikfast/issues/4
-            p[4:] += np.random.randn(3) * 0.01
-            targj = self.ikfast_ur3e_solver.inverse(p, q_guess=self.get_joint_configuration())
+            p[3:] += np.random.randn(4) * 0.01
+            targj = self.ikfast_ur3e_solver.inverse(p, q_guess=self.homej)
             if targj is not None:
                 break
 
@@ -218,8 +214,8 @@ if __name__ == "__main__":
     planeId = p.loadURDF("plane.urdf", [0, 0, -1.0])
     tableId = p.loadURDF(str(asset_path / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
     robot = UR3e(simulate_real_time=True)
-    pose = [0.4, -0.0, 0.1]
-    pose.extend(p.getQuaternionFromEuler([np.pi, 0, 0]))
+    pose = [0.3, -0.0, 0.2]
+    pose.extend(p.getQuaternionFromEuler([0.0, 0.0, 0.0]))
     pose = np.array(pose)
     robot.movep(pose, max_steps=2000)
     pose = [0.3, -0.4, 0.1]
