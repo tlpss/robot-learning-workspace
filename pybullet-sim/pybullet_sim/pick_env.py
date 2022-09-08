@@ -47,7 +47,7 @@ class UR3ePick(gym.Env):
 
         # camera on part of the workspace that is reachable and does not have the robot or bin in view
         # make camera high and very small fov, to approximate an orthographic view (Andy Zeng uses orthographic reprojection through point cloud)
-        self.camera = Zed2i([0, -0.301, 1.5],vertical_fov_degrees=17, image_size=UR3ePick.image_dimensions, target_position=[0, -0.3, 0])
+        self.camera = Zed2i([-0.03, -0.3301, 1.5],vertical_fov_degrees=15, image_size=UR3ePick.image_dimensions, target_position=[-0.03, -0.33, 0])
         
     
         self.current_episode_duration = 0
@@ -75,9 +75,11 @@ class UR3ePick(gym.Env):
         
         p.resetDebugVisualizerCamera(cameraDistance=1.8, cameraYaw=0, cameraPitch=-45, cameraTargetPosition=[0, 0, 0])
         self.plane_id = p.loadURDF("plane.urdf", [0, 0, -1.0])
+        p.loadURDF(str(ASSET_PATH / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.01])
+
         self.table_id = p.loadURDF(str(ASSET_PATH / "ur3e_workspace" / "workspace.urdf"), [0, -0.3, -0.001])
         self.basket_id = p.loadURDF("tray/tray.urdf",[0.4,-0.2,0.01],[0,0,1,0],globalScaling=0.6,useFixedBase=True)
-        self.gripper = WSG50() # DON'T USE ROBOTIQ! physics are not stable..
+        self.gripper = WSG50(simulate_realtime=self.simulate_realtime) # DON'T USE ROBOTIQ! physics are not stable..
         self.robot = UR3e(eef_start_pose=UR3ePick.initial_eef_pose, gripper=self.gripper, simulate_real_time=self.simulate_realtime)
 
         self.object_ids = []
@@ -91,12 +93,12 @@ class UR3ePick(gym.Env):
             p.changeVisualShape(id, -1, rgbaColor=random.choice(self.object_config.colors))
             p.changeDynamics(id,-1,lateralFriction=5.0)
             self.object_ids.append(id)
-
+            for _ in range(200):
+                p.stepSimulation()
         if self.simulate_realtime:
             enable_debug_rendering()
 
-            for _ in range(200):
-                p.stepSimulation()
+
         return self.get_current_observation()
 
     def step(self, action: np.ndarray):
@@ -111,8 +113,8 @@ class UR3ePick(gym.Env):
 
         # check if object was grasped
         success = self._is_grasp_succesfull()
-        reward = self._reward()
-        done = self._done()
+        reward = self._reward() # before place!
+        
         logger.debug(f"grasp succes = {success}")
 
         if success:
@@ -122,17 +124,20 @@ class UR3ePick(gym.Env):
             self._drop_in_bin()
         # move robot back to initial pose
         self._move_robot(UR3ePick.initial_eef_pose[:3],speed=0.005)
-
+        
+        done = self._done() # after bookkeeping!
         new_observation = self.get_current_observation()
         return new_observation, reward, done, {}
 
     def get_current_observation(self):
         rgb, depth, _ = self.camera.get_image()
+        rgb = rgb.astype(np.float32)/ 255.0 # range [0,1] as it will become float with depth map
         return np.concatenate([rgb,depth[:,:,np.newaxis]],axis=-1)
 
     def execute_pick_primitive(self, grasp_pose: np.ndarray):
 
         grasp_position = grasp_pose[:3]
+        grasp_position[2] = max(grasp_position[2]-0.02,0.01) # position is top of object -> graps 2cm below unless this < 0.01cm.
 
         if np.linalg.norm(grasp_position) > 0.48:
             logger.info(f"grasp position was not reachable {grasp_position}")
@@ -181,8 +186,15 @@ class UR3ePick(gym.Env):
         heighest_object_position = p.getBasePositionAndOrientation(self.object_ids[heightest_object_id])[0]
         heighest_object_position = np.array(heighest_object_position)
         heighest_object_position[2] -= 0.001 # firmer grasp
-        pick_pose = np.concatenate([heighest_object_position, np.random.rand(1) * np.pi])
-        return pick_pose
+        pick_pose = np.concatenate([heighest_object_position, np.zeros((1,))])
+        if not self.use_spatial_action_map:
+            return pick_pose
+        else:
+            img_point=   np.linalg.inv(self.camera.extrinsics_matrix) @ np.concatenate([heighest_object_position, np.ones((1,))])
+            coordinate = self.camera.intrinsics_matrix @ img_point[:3]
+            coordinate /= coordinate[2]
+            coordinate = np.clip(coordinate,0,UR3ePick.image_dimensions[0]-1) # make sure poses are reachable
+            return np.concatenate([coordinate[:2],np.zeros((1,))])
 
     def _is_grasp_succesfull(self):
         return self.gripper.get_relative_position() < 0.95 and max(self._get_object_heights(self.object_ids)) > 0.1
@@ -204,7 +216,7 @@ class UR3ePick(gym.Env):
     def _image_coords_to_world(self,u:int, v:int, depth_map:np.ndarray) -> np.ndarray:
         img_coords = np.array([u,v,1.0])
         ray_in_camera_frame = np.linalg.inv(self.camera.intrinsics_matrix )@ img_coords
-        z_in_camera_frame = depth_map[u,v]
+        z_in_camera_frame = depth_map[v,u] # Notice order!!
         t = z_in_camera_frame / ray_in_camera_frame[2]
         position_in_camera_frame = t* ray_in_camera_frame
 
@@ -226,21 +238,26 @@ class UR3ePick(gym.Env):
 if __name__ == "__main__":
     import time
     import matplotlib.pyplot as plt
-    logging.basicConfig(level=logging.DEBUG)
+    #logging.basicConfig(level=logging.DEBUG)
 
     env = UR3ePick()
     obs = env.reset()
     done = False
     while not done:
-        # plt.imshow(obs[:,:,:3])
-        # plt.show()
-        # plt.imshow(obs[:,:,-1])
-        # plt.show()
-        # u = int(input("u"))
-        # v= int(input("v"))
-        # position = env._image_coords_to_world(u,v,obs[:,:,-1])
-        # print(position)
-        # obs, reward, done , _ = env.step(np.concatenate([position,np.zeros((1,))]))
-        obs, reward, done ,_ = env.step(env.get_oracle_action())
+        img = obs[:,:,:3]
+        print(np.max(img))
+        print(np.min(img))
+        plt.imshow(obs[:,:,:3])
+        plt.show()
+        plt.savefig("test.jpg")
+        plt.imshow(obs[:,:,-1])
+        plt.show()
+        u = int(input("u"))
+        v= int(input("v"))
+        print(obs[u,v,-1])
+        position = env._image_coords_to_world(u,v,obs[:,:,-1])
+        print(position)
+        obs, reward, done , _ = env.step(np.concatenate([position,np.zeros((1,))]))
+        #obs, reward, done ,_ = env.step(env.get_oracle_action())
 
     time.sleep(30)

@@ -166,6 +166,7 @@ def explore_camera_output():
     coordinate = cam.intrinsics_matrix @ img_point[:3]
     print(f"{coordinate=}")
     img, depth, segm = cam.get_image()
+    print(np.max(img))
     plt.imshow(img)
     plt.show()
     # plt.imshow(depth)

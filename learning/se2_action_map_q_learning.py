@@ -1,14 +1,21 @@
 import logging
 import math
+from pathlib import Path
 import random
 import torch.nn as nn
 import numpy as np
 import torch
 import torchvision.transforms.functional
 from typing import Tuple, List
+import cv2
+
+from pybullet_sim.pick_env import UR3ePick
+
 
 logger = logging.getLogger(__name__)
 ActionType =  np.ndarray
+import wandb 
+import tqdm 
 
 class ReplayBuffer(object):
     """Buffer to store environment transitions. Taken from https://github.com/denisyarats/pytorch_sac_ae/blob/master/utils.py """
@@ -57,13 +64,21 @@ class ReplayBuffer(object):
 class Unet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(4,1,5,padding="same")
-        self.relu = nn.ReLU()
+        n_channels = 32
+        self.network = nn.Sequential(
+            nn.Conv2d(4,n_channels,3,padding="same"),
+            nn.ReLU(),
+            nn.Conv2d(n_channels,n_channels,5,padding="same"),
+            nn.ReLU(),
+            nn.Conv2d(n_channels,n_channels,5,padding="same"),
+            nn.ReLU(),
+            nn.Conv2d(n_channels,1,5,padding="same"),
+        )
 
     def forward(self,x):
         assert len(x.shape) == 4 # BxCxHxW
         # do softmax over the last 2 dimensions
-        x = self.relu(self.conv1(x))
+        x = self.network(x)
         assert x.shape[1] == 1
         return x #Bx1xHxW
 class SpatialQNetwork(nn.Module):
@@ -102,18 +117,19 @@ class SpatialQNetwork(nn.Module):
             q_maps = self.forward(img).detach().cpu().numpy()
         indices = np.unravel_index(np.argmax(q_maps),q_maps.shape)
         theta  = self.rotations_in_radians[indices[0]]
-        return np.array([indices[1], indices[2],theta])
+        return np.array([indices[2], indices[1],theta]), q_maps
         
 
     def sample_action(self, img, exploration_greedy_epsilon = 0.1) -> ActionType:
     
         if np.random.rand() < exploration_greedy_epsilon:
-            action = np.array([random.randint(0,img.shape[-2] -1),random.randint(0,img.shape[-1] -1),random.choice(self.rotations_in_radians)])
+            action = np.array([random.randint(0,img.shape[2] -1),random.randint(0,img.shape[1] -1),random.choice(self.rotations_in_radians)])
+            q_maps = None
         else:
-            action = self.get_action(img)
+            action,q_maps = self.get_action(img)
             action[:2] += np.random.randn(2) * 6 # additional exploration noise?
             action[:2] = np.clip(action[:2],0,img.shape[1]-1) # assume square images!
-        return action
+        return action,q_maps
 
     def _pad_for_rotations(self,img: torch.Tensor) -> torch.Tensor:
         """
@@ -146,11 +162,14 @@ class SpatialQNetwork(nn.Module):
 
     def _rotate_batch_back(self, batch: torch.Tensor):
         assert len(batch.shape)==4
+        rotated = []
         for i in range(batch.shape[0]):
             angle = - np.rad2deg(self.rotations_in_radians[i])
-            batch[i] = torchvision.transforms.functional.rotate(batch[i],angle)
-        return batch
+            rotated.append(torchvision.transforms.functional.rotate(batch[i],angle))
+        return torch.stack(rotated)
 
+
+        
 
 class SpatialActionDQN(nn.Module):
     def __init__(self, img_resolution:int):
@@ -160,26 +179,52 @@ class SpatialActionDQN(nn.Module):
         self.target_q_network.load_state_dict(self.q_network.state_dict())
 
         self.replay_buffer = ReplayBuffer((img_resolution,img_resolution,4),(3,),10000,'cpu')
-        self.optim = torch.optim.Adam(self.q_network.parameters(),lr=3e-4)
+        self.optim = torch.optim.Adam(self.q_network.parameters(),lr=2e-3)
         self.discount_factor = 0.9
-        self.criterion = torch.nn.HuberLoss()
+        self.start_training_step = 100
+        self.n_bootstrap_steps = 200
+        self.criterion = torch.nn.HuberLoss() 
+        self.log_every_n_steps = 5
 
-    def train(self,env, n_iterations:int):
-        step = 0
+        self.log = wandb.log
 
-        while (step < n_iterations):
-            obs = env.reset()
-            done = False
-            episode_steps = 0
-            while not done:
-                with torch.no_grad():
-                    torch_obs = self._np_image_to_torch(obs)
-                    action = self.q_network.sample_action(torch_obs)
-                    next_obs, reward, done,_ = env.step(action)
-                    logger.debug(f"experience: {action=}, {reward=},{done=}")
-                    self.replay_buffer.add(obs,action,reward,next_obs,done)
-                    episode_steps += 1
-                self.training_step()
+    def train(self,env: UR3ePick, n_iterations:int):
+        done = True
+        for iteration in tqdm.trange(n_iterations):
+            if done:
+                obs = env.reset()
+                done = False
+            self.log({"iteration": iteration},step=iteration)
+            with torch.no_grad():
+                torch_obs = self._np_image_to_torch(obs)
+                if iteration > self.n_bootstrap_steps:
+                    action, q_maps = self.q_network.sample_action(torch_obs,exploration_greedy_epsilon=0.05)
+                    if iteration % self.log_every_n_steps == 0 :
+                        if q_maps is not None:
+                            for i in range(self.q_network.n_rotations):
+                                self.log({f"interaction_spatial_action_map_{self.q_network.rotations_in_radians[i]}":wandb.Image(q_maps[i])},step=iteration)
+                else:
+                    action = env.get_oracle_action()
+                if iteration % self.log_every_n_steps == 0:
+                    self.visualize_action(obs,action)
+
+            next_obs, reward, done,_ = env.step(action)
+            self.log({"reward": reward},step=iteration)
+            logger.info(f"experience: {action=}, {reward=},{done=}")
+            self.replay_buffer.add(obs,action,reward,next_obs,done)
+            if iteration > self.start_training_step:
+                loss = self.training_step()
+
+                self.log({"train_loss": loss},step=iteration)
+
+
+    def visualize_action(self,obs,action):
+        obs = obs[...,:3]
+        obs = np.ascontiguousarray(obs)
+        u,v = int(action[0]),int(action[1])
+        vis = cv2.circle(obs,(u,v),4,(0,0,0),-1)
+        self.log({"action":wandb.Image(vis)})
+
     @staticmethod
     def _np_image_to_torch(x):
         x = torch.tensor(x)
@@ -195,7 +240,7 @@ class SpatialActionDQN(nn.Module):
         q_values = self.q_network(obs)
         # get the Q-value of the action that was taken
         rot_index = np.argmin((self.q_network.rotations_in_radians-action[2].item())**2)
-        action_q_value = q_values[rot_index, int(action[0]),int(action[1])]
+        action_q_value = q_values[rot_index, int(action[0]),int(action[1])].unsqueeze(0) # make sure dim = (1,) to match td_q_value
 
         # get the max(Q-value) (==value function of that state) of the target network on the next_obs
         future_reward = np.max(self.target_q_network(next_obs).detach().cpu().numpy())
@@ -213,7 +258,8 @@ class SpatialActionDQN(nn.Module):
         # update target network 
         soft_update_params(self.q_network, self.target_q_network)
         # return loss 
-        return loss.detach().cpu().numpy()
+        loss = loss.detach().cpu().numpy()
+        return loss
 
 def soft_update_params(net:nn.Module, target_net:nn.Module, tau:float = 0.005):
     for param, target_param in zip(net.parameters(), target_net.parameters()):
@@ -222,18 +268,17 @@ def soft_update_params(net:nn.Module, target_net:nn.Module, tau:float = 0.005):
         )
 
 
+def seed_all(x):
+    torch.random.manual_seed(x)
+    np.random.seed(x)
+    random.seed(x)
+    
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+
+    seed_all(2022)
+    logging.basicConfig(level=logging.INFO)
     from pybullet_sim.pick_env import UR3ePick
-    img = torch.randn((4,100,100))
-    qnet = SpatialQNetwork(n_rotations=3,device='cpu')
-    with torch.autograd.set_detect_anomaly(True):
-        q_vals = qnet(img)
-        print(q_vals.shape)
-        action = qnet.get_action(img)
-        print(action)
-        sampled_action = qnet.sample_action(img, 1.0)
-        print(sampled_action)
-        env = UR3ePick(use_motion_primitive=True, use_spatial_action_map=True,simulate_realtime=False)
-        dqn = SpatialActionDQN(env.image_dimensions[0])
-        dqn.train(env,100)
+    wandb.init(project="spatial-action-pybullet-pick",dir=str(Path(__file__).parent / "wandb"),mode="online")
+    env = UR3ePick(use_motion_primitive=True, use_spatial_action_map=True,simulate_realtime=False)
+    dqn = SpatialActionDQN(env.image_dimensions[0])
+    dqn.train(env,10000)
