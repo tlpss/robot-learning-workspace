@@ -6,7 +6,6 @@ import pybullet as p
 import pybullet_data
 from pybullet_sim.assets.path import get_asset_root_folder
 
-
 class Zed2i:
     """
     Simluated Zed2i camera in PyBullet.

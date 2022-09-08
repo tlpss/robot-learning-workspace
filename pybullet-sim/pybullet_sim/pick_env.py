@@ -17,6 +17,8 @@ from pybullet_sim.pybullet_utils import disable_debug_rendering, enable_debug_re
 
 ASSET_PATH = get_asset_root_folder()
 
+logger = logging.getLogger(__name__)
+
 @dataclasses.dataclass
 class ObjectConfig:
     
@@ -102,15 +104,16 @@ class UR3ePick(gym.Env):
 
         if self.use_motion_primitive:
             if self.use_spatial_action_map:
-                # convert (u,v,k) to (x,y,z,theta)
-                raise NotImplementedError
+                # convert (u,v,theta) to (x,y,z,theta)
+                position = self._image_coords_to_world(int(action[0]),int(action[1]),self.get_current_observation()[...,3])
+                action = np.concatenate([position,np.array([action[2]])])
             self.execute_pick_primitive(action)
 
         # check if object was grasped
         success = self._is_grasp_succesfull()
         reward = self._reward()
         done = self._done()
-        logging.debug(f"grasp succes = {success}")
+        logger.debug(f"grasp succes = {success}")
 
         if success:
             # move to bin (only visually pleasing?) and 
@@ -131,8 +134,8 @@ class UR3ePick(gym.Env):
 
         grasp_position = grasp_pose[:3]
 
-        if np.linalg.norm(grasp_position) > 0.45:
-            logging.info(f"grasp position was not reachable {grasp_position}")
+        if np.linalg.norm(grasp_position) > 0.48:
+            logger.info(f"grasp position was not reachable {grasp_position}")
             return 
         grasp_orientation = grasp_pose[3]
         pregrasp_position = np.copy(grasp_position)
@@ -147,7 +150,8 @@ class UR3ePick(gym.Env):
 
     def _reward(self) -> float:
         if self.use_motion_primitive:
-            return self._is_grasp_succesfull()
+            return self._is_grasp_succesfull() * 1.0
+
     def _done(self):
         # no attempt to verify if all objects are still reachable..
         # TODO: fix!
@@ -162,7 +166,7 @@ class UR3ePick(gym.Env):
         eef_target_position[0:3] = position
         #eef_target_position = self._clip_target_position(eef_target_position)
 
-        logging.debug(f"target EEF pose = {eef_target_position.tolist()[:3]}")
+        logger.debug(f"target EEF pose = {eef_target_position.tolist()[:3]}")
 
         self.robot.movep(eef_target_position, speed=speed, max_steps=max_steps)
 
