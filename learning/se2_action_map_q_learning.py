@@ -64,15 +64,18 @@ class ReplayBuffer(object):
 class Unet(nn.Module):
     def __init__(self):
         super().__init__()
-        n_channels = 32
+        n_channels = 16
         self.network = nn.Sequential(
             nn.Conv2d(4,n_channels,3,padding="same"),
             nn.ReLU(),
-            nn.Conv2d(n_channels,n_channels,5,padding="same"),
+            nn.Conv2d(n_channels,n_channels,3,padding="same"),
             nn.ReLU(),
-            nn.Conv2d(n_channels,n_channels,5,padding="same"),
+            nn.Conv2d(n_channels,n_channels,3,padding="same"),
             nn.ReLU(),
-            nn.Conv2d(n_channels,1,5,padding="same"),
+            nn.Conv2d(n_channels,n_channels,3,padding="same"),
+            nn.ReLU(),
+            nn.Conv2d(n_channels,1,3,padding="same"),
+            nn.Softmax()
         )
 
     def forward(self,x):
@@ -127,8 +130,6 @@ class SpatialQNetwork(nn.Module):
             q_maps = None
         else:
             action,q_maps = self.get_action(img)
-            action[:2] += np.random.randn(2) * 6 # additional exploration noise?
-            action[:2] = np.clip(action[:2],0,img.shape[1]-1) # assume square images!
         return action,q_maps
 
     def _pad_for_rotations(self,img: torch.Tensor) -> torch.Tensor:
@@ -179,10 +180,10 @@ class SpatialActionDQN(nn.Module):
         self.target_q_network.load_state_dict(self.q_network.state_dict())
 
         self.replay_buffer = ReplayBuffer((img_resolution,img_resolution,4),(3,),10000,'cpu')
-        self.optim = torch.optim.Adam(self.q_network.parameters(),lr=2e-3)
+        self.optim = torch.optim.Adam(self.q_network.parameters(),lr=4e-4)
         self.discount_factor = 0.9
         self.start_training_step = 100
-        self.n_bootstrap_steps = 200
+        self.n_bootstrap_steps = 1000
         self.criterion = torch.nn.HuberLoss() 
         self.log_every_n_steps = 5
 
@@ -198,7 +199,7 @@ class SpatialActionDQN(nn.Module):
             with torch.no_grad():
                 torch_obs = self._np_image_to_torch(obs)
                 if iteration > self.n_bootstrap_steps:
-                    action, q_maps = self.q_network.sample_action(torch_obs,exploration_greedy_epsilon=0.05)
+                    action, q_maps = self.q_network.sample_action(torch_obs,exploration_greedy_epsilon=0.1)
                     if iteration % self.log_every_n_steps == 0 :
                         if q_maps is not None:
                             for i in range(self.q_network.n_rotations):
@@ -222,7 +223,7 @@ class SpatialActionDQN(nn.Module):
         obs = obs[...,:3]
         obs = np.ascontiguousarray(obs)
         u,v = int(action[0]),int(action[1])
-        vis = cv2.circle(obs,(u,v),4,(0,0,0),-1)
+        vis = cv2.circle(obs,(u,v),1+obs.shape[0]//64,(0,0,0),-1)
         self.log({"action":wandb.Image(vis)})
 
     @staticmethod
@@ -243,11 +244,10 @@ class SpatialActionDQN(nn.Module):
         action_q_value = q_values[rot_index, int(action[0]),int(action[1])].unsqueeze(0) # make sure dim = (1,) to match td_q_value
 
         # get the max(Q-value) (==value function of that state) of the target network on the next_obs
-        future_reward = np.max(self.target_q_network(next_obs).detach().cpu().numpy())
+        #future_reward = np.max(self.target_q_network(next_obs).detach().cpu().numpy())
 
         # compute TD loss
-
-        td_q_value = reward + self.discount_factor * future_reward
+        td_q_value = reward #+ self.discount_factor * future_reward
         loss = self.criterion(action_q_value, td_q_value)
         # backprop.
 
@@ -256,7 +256,7 @@ class SpatialActionDQN(nn.Module):
         self.optim.step()
 
         # update target network 
-        soft_update_params(self.q_network, self.target_q_network)
+        #soft_update_params(self.q_network, self.target_q_network)
         # return loss 
         loss = loss.detach().cpu().numpy()
         return loss

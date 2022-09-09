@@ -27,11 +27,11 @@ class ObjectConfig:
     object_list= [{"path": str(ASSET_PATH/ "cylinder" / "1:2cylinder.urdf"), "scale":(0.03,0.05)}]
 
 class UR3ePick(gym.Env):
-    image_dimensions = (256,256)
+    image_dimensions = (64,64)
 
     initial_eef_pose = [0.4, 0.1,0.2,1,0,0,0] # robot should be out of view.
-    pick_workspace_x_range = (-0.2,0.15)
-    pick_workspace_y_range = (-0.45,-0.2)
+    pick_workspace_x_range = (-0.15,0.15)
+    pick_workspace_y_range = (-0.4,-0.2)
 
 
     def __init__(self, use_spatial_action_map = False, use_motion_primitive=True, simulate_realtime=True, object_config: ObjectConfig = None) -> None:
@@ -139,18 +139,20 @@ class UR3ePick(gym.Env):
         grasp_position = grasp_pose[:3]
         grasp_position[2] = max(grasp_position[2]-0.02,0.01) # position is top of object -> graps 2cm below unless this < 0.01cm.
 
-        if np.linalg.norm(grasp_position) > 0.48:
+        if np.linalg.norm(grasp_position) > 0.45:
             logger.info(f"grasp position was not reachable {grasp_position}")
             return 
         grasp_orientation = grasp_pose[3]
         pregrasp_position = np.copy(grasp_position)
         pregrasp_position[2] += 0.15
-
-        self.gripper.open_gripper()
-        self._move_robot(pregrasp_position,grasp_orientation,speed=0.005)
-        self._move_robot(grasp_position,grasp_orientation)
-        self.gripper.close_gripper(max_force=50)
-        self._move_robot(pregrasp_position)
+        try:
+            self.gripper.open_gripper()
+            self._move_robot(pregrasp_position,grasp_orientation,speed=0.005)
+            self._move_robot(grasp_position,grasp_orientation)
+            self.gripper.close_gripper(max_force=50)
+            self._move_robot(pregrasp_position)
+        except Exception as e:
+            print(f"COULD NOT EXECUTE PRIMITIVE, exception = {e}")
 
 
     def _reward(self) -> float:
@@ -194,7 +196,7 @@ class UR3ePick(gym.Env):
             coordinate = self.camera.intrinsics_matrix @ img_point[:3]
             coordinate /= coordinate[2]
             coordinate = np.clip(coordinate,0,UR3ePick.image_dimensions[0]-1) # make sure poses are reachable
-            return np.concatenate([coordinate[:2],np.zeros((1,))])
+            return np.concatenate([coordinate[:2].astype(np.uint8),np.zeros((1,))])
 
     def _is_grasp_succesfull(self):
         return self.gripper.get_relative_position() < 0.95 and max(self._get_object_heights(self.object_ids)) > 0.1
