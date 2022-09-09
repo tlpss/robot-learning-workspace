@@ -75,7 +75,7 @@ class Unet(nn.Module):
             nn.Conv2d(n_channels,n_channels,3,padding="same"),
             nn.ReLU(),
             nn.Conv2d(n_channels,1,3,padding="same"),
-            nn.Softmax()
+            #nn.Softmax()
         )
 
     def forward(self,x):
@@ -213,6 +213,7 @@ class SpatialActionDQN(nn.Module):
             self.log({"reward": reward},step=iteration)
             logger.info(f"experience: {action=}, {reward=},{done=}")
             self.replay_buffer.add(obs,action,reward,next_obs,done)
+            obs = next_obs
             if iteration > self.start_training_step:
                 loss = self.training_step()
 
