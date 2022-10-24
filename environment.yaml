@@ -17,3 +17,4 @@ dependencies:
     - timm
     - pytest
     - pre-commit
+    - 
