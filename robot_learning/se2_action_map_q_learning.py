@@ -57,24 +57,26 @@ class ReplayBuffer(object):
 
 
 class Unet(nn.Module):
-    def __init__(self):
+    def __init__(self, n_layers: int = 8, n_channels: int = 64):
         super().__init__()
-        n_channels = 128
+        assert n_layers % 2 == 0
+        #TODO: dynamically set number of 'blocks' in the CNN
         self.network = nn.Sequential(
             nn.Conv2d(4, n_channels, 3, padding="same"),
             nn.ReLU(),
-            nn.Conv2d(n_channels, n_channels, 3, dilation=2, padding=3),
-            nn.BatchNorm2d(n_channels),
-            nn.ReLU(),
-            nn.Conv2d(n_channels, n_channels, 3, dilation=2, padding=3),
-            nn.ReLU(),
-            nn.Conv2d(n_channels, n_channels, 3, padding="same"),
-            nn.ReLU(),
+
             nn.Conv2d(n_channels, n_channels, 3, dilation=2, padding=3),
             nn.BatchNorm2d(n_channels),
             nn.ReLU(),
             nn.Conv2d(n_channels, n_channels, 3, padding="same"),
             nn.ReLU(),
+
+            nn.Conv2d(n_channels, n_channels, 3, dilation=2, padding=3),
+            nn.BatchNorm2d(n_channels),
+            nn.ReLU(),
+            nn.Conv2d(n_channels, n_channels, 3, padding="same"),
+            nn.ReLU(),
+
             nn.Conv2d(n_channels, n_channels, 3, padding="same", bias=False),
             nn.ReLU(),
             nn.Conv2d(n_channels, 1, 3, padding="same", bias=False),
@@ -184,24 +186,24 @@ class SpatialQNetwork(nn.Module):
 
 
 class SpatialActionDQN(nn.Module):
-    def __init__(self, img_resolution: int, n_rotations=1, device='cpu'):
+    def __init__(self, img_resolution: int, n_rotations=1, batch_size: int = 3, n_demonstration_steps: int = 100, lr: float = 3e-4, device='cpu'):
         super().__init__()
 
         self.device = device
         self.discount_factor = 0.9
-        self.start_training_step = 1
-        self.n_bootstrap_steps = 0
+        self.start_training_step = 50
+        self.n_bootstrap_steps = n_demonstration_steps
         self.criterion = torch.nn.L1Loss()
-        self.log_every_n_steps = 9
+        self.log_every_n_steps = 21
         self.n_rotations = n_rotations
-        self.batch_size = 3
+        self.batch_size = batch_size
 
         self.q_network = SpatialQNetwork(n_rotations=n_rotations,device=self.device)
         self.target_q_network = SpatialQNetwork(n_rotations=n_rotations,device=self.device)
         self.target_q_network.load_state_dict(self.q_network.state_dict())
 
         self.replay_buffer = ReplayBuffer((img_resolution, img_resolution, 4), (3,), 10000, self.device)
-        self.optim = torch.optim.Adam(self.q_network.parameters(), lr=4e-4)
+        self.optim = torch.optim.Adam(self.q_network.parameters(), lr=lr)
 
         self.log = wandb.log
         
@@ -231,6 +233,7 @@ class SpatialActionDQN(nn.Module):
                 else:
                     action = env.get_oracle_action()
                 if iteration % self.log_every_n_steps == 0:
+                    #TODO: also visualize action result (next_obs)
                     self.visualize_action(obs, action)
 
                 next_obs, reward, done, _ = env.step(action)
@@ -299,7 +302,7 @@ class SpatialActionDQN(nn.Module):
             td_q_values.append(td_q_value)
             # backprop.
 
-        if iteration % 20 == 0 or iteration % 21 == 0:
+        if iteration % self.log_every_n_steps * 2 == 0:
             for i in range(self.q_network.n_rotations):
                 self.log(
                     {
