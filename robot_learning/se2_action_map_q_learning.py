@@ -168,7 +168,6 @@ class SpatialQNetwork(nn.Module):
 
     def _get_batch_of_rotations(self, img: torch.Tensor):
         assert len(img.shape) == 3
-        assert img.device.type == "cpu"
         rotated_imgs = []
         for rotation in self.rotations_in_radians:
             rot_in_deg = np.rad2deg(rotation)
@@ -185,22 +184,27 @@ class SpatialQNetwork(nn.Module):
 
 
 class SpatialActionDQN(nn.Module):
-    def __init__(self, img_resolution: int, n_rotations=1):
+    def __init__(self, img_resolution: int, n_rotations=1, device='cpu'):
         super().__init__()
-        self.q_network = SpatialQNetwork(n_rotations=n_rotations)
-        self.target_q_network = SpatialQNetwork(n_rotations=n_rotations)
-        self.target_q_network.load_state_dict(self.q_network.state_dict())
 
-        self.replay_buffer = ReplayBuffer((img_resolution, img_resolution, 4), (3,), 10000, "cpu")
-        self.optim = torch.optim.Adam(self.q_network.parameters(), lr=4e-4)
+        self.device = device
         self.discount_factor = 0.9
-        self.start_training_step = 20
-        self.n_bootstrap_steps = 10
+        self.start_training_step = 1
+        self.n_bootstrap_steps = 0
         self.criterion = torch.nn.L1Loss()
         self.log_every_n_steps = 9
         self.n_rotations = n_rotations
         self.batch_size = 3
+
+        self.q_network = SpatialQNetwork(n_rotations=n_rotations,device=self.device)
+        self.target_q_network = SpatialQNetwork(n_rotations=n_rotations,device=self.device)
+        self.target_q_network.load_state_dict(self.q_network.state_dict())
+
+        self.replay_buffer = ReplayBuffer((img_resolution, img_resolution, 4), (3,), 10000, self.device)
+        self.optim = torch.optim.Adam(self.q_network.parameters(), lr=4e-4)
+
         self.log = wandb.log
+        
 
     def train(self, env: UR3ePick, n_iterations: int):
         done = True
@@ -295,16 +299,16 @@ class SpatialActionDQN(nn.Module):
             td_q_values.append(td_q_value)
             # backprop.
 
-        if iteration % 20 == 0:
+        if iteration % 20 == 0 or iteration % 21 == 0:
             for i in range(self.q_network.n_rotations):
                 self.log(
                     {
                         f"train_spatial_action_map_{self.q_network.rotations_in_radians[i]:.2f}": wandb.Image(
-                            q_values[i]
+                            q_values[i].detach().cpu()
                         )
                     }
                 )
-            self.visualize_action(obs.permute(1, 2, 0)[..., :3], action, caption_prefix="train")
+            self.visualize_action(obs.detach().cpu().permute(1, 2, 0)[..., :3], action.cpu(), caption_prefix="train")
 
         action_q_values = torch.stack(action_q_values)
         td_q_values = torch.stack(td_q_values)
