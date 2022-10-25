@@ -109,7 +109,7 @@ class SpatialQNetwork(nn.Module):
         theta = self.rotations_in_radians[indices[0]]
         return np.array([indices[2], indices[1], theta]), q_maps
 
-    def sample_action(self, img, exploration_greedy_epsilon=0.1) -> ActionType:
+    def sample_action(self, img, exploration_greedy_epsilon=0.1, temperature=1e-8) -> ActionType:
 
         if np.random.rand() < exploration_greedy_epsilon:
             action = np.array(
@@ -124,15 +124,15 @@ class SpatialQNetwork(nn.Module):
             # sample an action according to the heatmaps
             with torch.no_grad():
                 q_maps = self.forward(img).detach().cpu().numpy()
-                self.temperature = 0.0001
-                q_maps += self.temperature
-                q_maps /= np.sum(q_maps)
-                flattened_probabilities = q_maps.flatten()
+                probability_map = np.copy(q_maps)
+                probability_map += temperature
+                probability_map /= np.sum(probability_map)
+                flattened_probabilities = probability_map.flatten()
 
                 sampled_flattened_index = np.random.choice(
                     np.arange(len(flattened_probabilities)), p=flattened_probabilities
                 )
-                sampled_indices = np.unravel_index(sampled_flattened_index, q_maps.shape)
+                sampled_indices = np.unravel_index(sampled_flattened_index, probability_map.shape)
                 theta = self.rotations_in_radians[sampled_indices[0]]
                 action = np.array([sampled_indices[2], sampled_indices[1], theta])
         return action, q_maps
@@ -181,6 +181,7 @@ class SpatialActionDQN(nn.Module):
         self,
         img_resolution: int,
         discount_factor=0.0,
+        action_sample_temperature=1e-6,
         n_rotations=1,
         n_resnet_blocks=3,
         n_downsampling_layers=1,
@@ -189,6 +190,7 @@ class SpatialActionDQN(nn.Module):
         n_demonstration_steps: int = 100,
         lr: float = 3e-4,
         device="cpu",
+        **kwargs,
     ):
         super().__init__()
         self.reactive_policy = True
@@ -196,7 +198,7 @@ class SpatialActionDQN(nn.Module):
 
         self.discount_factor = discount_factor
 
-        self.start_training_step = 1
+        self.start_training_step = 51
         self.log_every_n_steps = 21
 
         self.n_bootstrap_steps = n_demonstration_steps
@@ -204,6 +206,7 @@ class SpatialActionDQN(nn.Module):
 
         self.n_rotations = n_rotations
         self.batch_size = batch_size
+        self.action_sample_temperature = action_sample_temperature
 
         self.q_network = SpatialQNetwork(
             n_rotations, n_downsampling_layers, n_resnet_blocks, n_channels, device=self.device
@@ -233,7 +236,9 @@ class SpatialActionDQN(nn.Module):
             with torch.no_grad():
                 torch_obs = self._np_image_to_torch(obs)
                 if iteration > self.n_bootstrap_steps:
-                    action, q_maps = self.q_network.sample_action(torch_obs, exploration_greedy_epsilon=0.1)
+                    action, q_maps = self.q_network.sample_action(
+                        torch_obs, exploration_greedy_epsilon=0.1, temperature=self.action_sample_temperature
+                    )
                     if iteration % self.log_every_n_steps == 0:
                         if q_maps is not None:
                             for i in range(self.q_network.n_rotations):
@@ -270,7 +275,9 @@ class SpatialActionDQN(nn.Module):
         vis = cv2.circle(obs, (u, v), scale, (0, 0, 0), -1)
         grasp_orientation_vector = np.array([np.cos(theta), np.sin(theta)])
         line_start = np.array([u, v]) - grasp_orientation_vector * scale * 3
+        line_start = np.clip(0, obs.shape[0] - 1, line_start)
         line_end = np.array([u, v]) + grasp_orientation_vector * scale * 3
+        line_end = np.clip(0, obs.shape[0] - 1, line_end)
         vis = cv2.line(
             vis,
             line_start.astype(np.uint8),
