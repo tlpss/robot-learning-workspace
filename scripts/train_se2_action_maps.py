@@ -14,11 +14,13 @@ if __name__ == "__main__":
         "batch_size": 4,
         "n_rotations": 1,
         "n_channels": 64,
-        "n_layers": 6
+        "n_downsampling_layers": 1,
+        "n_resnet_blocks": 1,
+        "discount_factor": 0.0,
     }
     seed_all(2022)
     logging.basicConfig(level=logging.INFO)
-    wandb.init(project="spatial-action-pybullet-pick", dir=str(Path(__file__).parents[2]), mode="offline")
+    wandb.init(project="spatial-action-pybullet-pick", dir=str(Path(__file__).parents[1]), mode="online")
     env = UR3ePick(use_motion_primitive=True, use_spatial_action_map=True, simulate_realtime=False)
-    dqn = SpatialActionDQN(env.image_dimensions[0], n_rotations=1,device='cuda')
-    dqn.train(env, 200)
+    dqn = SpatialActionDQN(env.image_dimensions[0], device="cuda", **config)
+    dqn.train(env, 1000)

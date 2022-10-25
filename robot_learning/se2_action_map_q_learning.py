@@ -8,8 +8,12 @@ import torch.nn as nn
 import torchvision.transforms.functional
 from pybullet_sim.pick_env import UR3ePick
 
+from robot_learning.unet import Unet
+
 logger = logging.getLogger(__name__)
 ActionType = np.ndarray
+import math
+
 import tqdm
 import wandb
 
@@ -56,46 +60,23 @@ class ReplayBuffer(object):
         return obses, actions, rewards, next_obses, not_dones
 
 
-class Unet(nn.Module):
-    def __init__(self, n_layers: int = 8, n_channels: int = 64):
-        super().__init__()
-        assert n_layers % 2 == 0
-        #TODO: dynamically set number of 'blocks' in the CNN
-        self.network = nn.Sequential(
-            nn.Conv2d(4, n_channels, 3, padding="same"),
-            nn.ReLU(),
-
-            nn.Conv2d(n_channels, n_channels, 3, dilation=2, padding=3),
-            nn.BatchNorm2d(n_channels),
-            nn.ReLU(),
-            nn.Conv2d(n_channels, n_channels, 3, padding="same"),
-            nn.ReLU(),
-
-            nn.Conv2d(n_channels, n_channels, 3, dilation=2, padding=3),
-            nn.BatchNorm2d(n_channels),
-            nn.ReLU(),
-            nn.Conv2d(n_channels, n_channels, 3, padding="same"),
-            nn.ReLU(),
-
-            nn.Conv2d(n_channels, n_channels, 3, padding="same", bias=False),
-            nn.ReLU(),
-            nn.Conv2d(n_channels, 1, 3, padding="same", bias=False),
-        )
-
-    def forward(self, x):
-        assert len(x.shape) == 4  # BxCxHxW
-        # do softmax over the last 2 dimensions
-        x = self.network(x)
-        assert x.shape[1] == 1
-        return x  # Bx1xHxW
-
-
 class SpatialQNetwork(nn.Module):
-    def __init__(self, n_rotations=1, device="cpu") -> None:
+    def __init__(self, n_rotations=1, n_downsampling_layers=1, n_resnet_blocks=3, n_channels=64, device="cpu") -> None:
         super().__init__()
         self.device = device
 
-        self.q_network = Unet().to(self.device)
+        self.backbone = Unet(4, n_downsampling_layers, n_resnet_blocks, n_channels).to(self.device)
+
+        # have to bring head layers to device individually. Cannot move sequential to device..
+        self.head = (
+            nn.Sequential(  # inspired on https://github.com/andyzeng/visual-pushing-grasping/blob/master/models.py
+                nn.Conv2d(n_channels, n_channels, 1, bias=False, device=device),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(n_channels, 1, 1, bias=False, device=device),
+            )
+        )
+
+        self.q_network = nn.Sequential(self.backbone, self.head)
         self.n_rotations = n_rotations
         self.rotations_in_radians = np.arange(n_rotations) / n_rotations * np.pi  # symmetric gripper!
         self.pad_size = None
@@ -160,6 +141,8 @@ class SpatialQNetwork(nn.Module):
         assert len(img.shape) == 3  # no batch!
         if self.pad_size is None:
             self.pad_size = int((np.sqrt(img.shape[1] ** 2 + img.shape[2] ** 2) - min(img.shape[1:])) / 2)
+            self.pad_size = math.ceil(self.pad_size / 16) * 16  # make sure image remains multiple of 32.
+            print(f"padding size = {self.pad_size}")
         padded_img = torchvision.transforms.functional.pad(img, self.pad_size)
         return padded_img
 
@@ -186,27 +169,51 @@ class SpatialQNetwork(nn.Module):
 
 
 class SpatialActionDQN(nn.Module):
-    def __init__(self, img_resolution: int, n_rotations=1, batch_size: int = 3, n_demonstration_steps: int = 100, lr: float = 3e-4, device='cpu'):
+    def __init__(
+        self,
+        img_resolution: int,
+        discount_factor=0.0,
+        n_rotations=1,
+        n_resnet_blocks=3,
+        n_downsampling_layers=1,
+        n_channels=64,
+        batch_size: int = 3,
+        n_demonstration_steps: int = 100,
+        lr: float = 3e-4,
+        device="cpu",
+    ):
         super().__init__()
-
+        self.reactive_policy = True
         self.device = device
-        self.discount_factor = 0.9
-        self.start_training_step = 50
+
+        self.discount_factor = discount_factor
+
+        self.start_training_step = 1
+        self.log_every_n_steps = 21
+
         self.n_bootstrap_steps = n_demonstration_steps
         self.criterion = torch.nn.L1Loss()
-        self.log_every_n_steps = 21
+
         self.n_rotations = n_rotations
         self.batch_size = batch_size
 
-        self.q_network = SpatialQNetwork(n_rotations=n_rotations,device=self.device)
-        self.target_q_network = SpatialQNetwork(n_rotations=n_rotations,device=self.device)
-        self.target_q_network.load_state_dict(self.q_network.state_dict())
+        self.q_network = SpatialQNetwork(
+            n_rotations, n_downsampling_layers, n_resnet_blocks, n_channels, device=self.device
+        )
+        if self.discount_factor > 0.0:
+            self.target_q_network = SpatialQNetwork(
+                n_rotations, n_downsampling_layers, n_resnet_blocks, n_channels, device=self.device
+            )
+            self.target_q_network.load_state_dict(self.q_network.state_dict())
+        else:
+            print(
+                "discount factor was set to zero, the policy will be completely reactive and not consider future rewards."
+            )
 
         self.replay_buffer = ReplayBuffer((img_resolution, img_resolution, 4), (3,), 10000, self.device)
         self.optim = torch.optim.Adam(self.q_network.parameters(), lr=lr)
 
         self.log = wandb.log
-        
 
     def train(self, env: UR3ePick, n_iterations: int):
         done = True
@@ -232,19 +239,18 @@ class SpatialActionDQN(nn.Module):
                                 )
                 else:
                     action = env.get_oracle_action()
-                if iteration % self.log_every_n_steps == 0:
-                    #TODO: also visualize action result (next_obs)
-                    self.visualize_action(obs, action)
 
                 next_obs, reward, done, _ = env.step(action)
+
+                if iteration % self.log_every_n_steps == 0:
+                    self.visualize_action(obs, action, "interaction")
+                    self.log({"interaction_next_obs": wandb.Image(next_obs[..., :3])}, step=iteration)
                 self.log({"reward": reward}, step=iteration)
                 logger.info(f"experience: {action=}, {reward=},{done=}")
                 self.replay_buffer.add(obs, action, reward, next_obs, done)
                 obs = next_obs
             if iteration > self.start_training_step:
                 loss = self.training_step(iteration)
-                print(f"loss = {loss}")
-
                 self.log({"train_loss": loss}, step=iteration)
 
     def visualize_action(self, obs, action, caption_prefix=""):
@@ -268,7 +274,7 @@ class SpatialActionDQN(nn.Module):
             ),
             scale // 2,
         )
-        self.log({f"{caption_prefix}action": wandb.Image(vis)})
+        self.log({f"{caption_prefix}_action": wandb.Image(vis)})
 
     @staticmethod
     def _np_image_to_torch(x):
@@ -279,7 +285,7 @@ class SpatialActionDQN(nn.Module):
     def training_step(self, iteration):
         action_q_values = []
         td_q_values = []
-        for _ in range(self.batch_size):
+        for batch_index in range(self.batch_size):
             # get obs, action(u,v,theta), reward, next_obs
             obs, action, reward, next_obs, done = self.replay_buffer.sample(1)
             obs, action, reward, next_obs, done = obs[0], action[0], reward[0], next_obs[0], done[0]
@@ -294,15 +300,18 @@ class SpatialActionDQN(nn.Module):
             )  # make sure dim = (1,) to match td_q_value
 
             action_q_values.append(action_q_value)
-            # get the max(Q-value) (==value function of that state) of the target network on the next_obs
-            # future_reward = np.max(self.target_q_network(next_obs).detach().cpu().numpy())
 
             # compute TD loss
-            td_q_value = reward  # + self.discount_factor * future_reward
-            td_q_values.append(td_q_value)
-            # backprop.
+            if self.discount_factor > 0.0:
+                # get the max(Q-value) (==value function of that state) of the target network on the next_obs
+                future_reward = torch.max(self.target_q_network(next_obs))
+                td_q_value = reward + self.discount_factor * future_reward
+            else:
+                td_q_value = reward
 
-        if iteration % self.log_every_n_steps * 2 == 0:
+            td_q_values.append(td_q_value)
+
+        if iteration % self.log_every_n_steps == 0:
             for i in range(self.q_network.n_rotations):
                 self.log(
                     {
@@ -320,9 +329,10 @@ class SpatialActionDQN(nn.Module):
         loss.backward()
         self.optim.step()
 
-        # update target network
-        # soft_update_params(self.q_network, self.target_q_network)
-        # return loss
+        if self.discount_factor > 0.0:
+            # update target network
+            soft_update_params(self.q_network, self.target_q_network)
+
         loss = loss.detach().cpu().numpy()
         return loss
 
@@ -336,3 +346,11 @@ def seed_all(x):
     torch.random.manual_seed(x)
     np.random.seed(x)
     random.seed(x)
+
+
+if __name__ == "__main__":
+    network = SpatialQNetwork(2, device="cuda")
+    img = torch.randn(4, 256, 256).to("cuda")
+    print(img.device)
+    map = network(img)
+    print(map.shape)
