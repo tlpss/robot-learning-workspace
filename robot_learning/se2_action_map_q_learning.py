@@ -73,6 +73,7 @@ class SpatialQNetwork(nn.Module):
                 nn.Conv2d(n_channels, n_channels, 1, bias=False, device=device),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(n_channels, 1, 1, bias=False, device=device),
+                nn.ReLU(inplace=True),
             )
         )
 
@@ -120,13 +121,20 @@ class SpatialQNetwork(nn.Module):
             )
             q_maps = None
         else:
-            action, q_maps = self.get_action(img)
-            action[0] += int(np.random.randn() * img.shape[2] / 64)
-            action[1] += int(np.random.randn() * img.shape[1] / 64)
-            action[0] = np.clip(0, img.shape[2] - 1, action[0])
-            action[1] = np.clip(0, img.shape[1] - 1, action[1])
-            if np.random.randn() < exploration_greedy_epsilon:
-                action[2] = np.random.choice(self.rotations_in_radians)
+            # sample an action according to the heatmaps
+            with torch.no_grad():
+                q_maps = self.forward(img).detach().cpu().numpy()
+                self.temperature = 0.0001
+                q_maps += self.temperature
+                q_maps /= np.sum(q_maps)
+                flattened_probabilities = q_maps.flatten()
+
+                sampled_flattened_index = np.random.choice(
+                    np.arange(len(flattened_probabilities)), p=flattened_probabilities
+                )
+                sampled_indices = np.unravel_index(sampled_flattened_index, q_maps.shape)
+                theta = self.rotations_in_radians[sampled_indices[0]]
+                action = np.array([sampled_indices[2], sampled_indices[1], theta])
         return action, q_maps
 
     def _pad_for_rotations(self, img: torch.Tensor) -> torch.Tensor:
