@@ -271,7 +271,7 @@ class SpatialActionDQN(nn.Module):
     def visualize_action(self, obs, action, reward, caption_prefix=""):
         scale = 1 + obs.shape[0] // 64
         obs = obs[..., :3]
-        obs = np.ascontiguousarray(obs)
+        obs = np.ascontiguousarray(obs) * 255  # to 0 -255
         u, v = int(action[0]), int(action[1])
         theta = action[2]
 
