@@ -4,21 +4,21 @@ from pathlib import Path
 import wandb
 from pybullet_sim.pick_env import UR3ePick
 
-from robot_learning.se2_action_map_q_learning import SpatialActionDQN, seed_all
+from robot_learning.spatial_action_map_q_learning import SpatialActionDQN, seed_all
 
 if __name__ == "__main__":
 
     config = {
-        "n_demonstration_steps": 10,
-        "lr": 1e-3,
-        "batch_size": 4,
+        "n_demonstration_steps": 1,
+        "lr": 5e-4,
+        "batch_size": 8,
         "n_rotations": 1,
         "n_channels": 128,
         "n_downsampling_layers": 1,
-        "n_resnet_blocks": 1,
-        "discount_factor": 0.0,
-        "action_sample_temperature": 1e-8,
-        "n_training_steps": 1000,
+        "n_resnet_blocks": 3,
+        "discount_factor": 0,
+        "action_sample_temperature": 0.0,
+        "n_training_steps": 5000,
         "seed": 2022,
     }
     logging.basicConfig(level=logging.INFO)

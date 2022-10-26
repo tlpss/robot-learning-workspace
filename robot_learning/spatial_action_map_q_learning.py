@@ -68,13 +68,11 @@ class SpatialQNetwork(nn.Module):
         self.backbone = Unet(4, n_downsampling_layers, n_resnet_blocks, n_channels).to(self.device)
 
         # have to bring head layers to device individually. Cannot move sequential to device..
-        self.head = (
-            nn.Sequential(  # inspired on https://github.com/andyzeng/visual-pushing-grasping/blob/master/models.py
-                nn.Conv2d(n_channels, n_channels, 1, bias=False, device=device),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(n_channels, 1, 1, bias=False, device=device),
-                nn.ReLU(inplace=True),
-            )
+        self.head = nn.Sequential(  # inspired on https://github.com/andyzeng/visual-pushing-grasping/blob/master/models.py
+            nn.Conv2d(n_channels, n_channels, 3, bias=True, device=device, padding="same"),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(n_channels, 1, 1, bias=True, device=device),
+            # nn.Sigmoid()
         )
 
         self.q_network = nn.Sequential(self.backbone, self.head)
@@ -92,7 +90,7 @@ class SpatialQNetwork(nn.Module):
         q_maps = self._rotate_batch_back(rotated_q_maps)
         q_maps = self._unpad_after_rotations(q_maps)
         assert len(q_maps.shape) == 4
-        return q_maps.squeeze(1)  # B,H,W as it has only one channel!
+        return q_maps.squeeze(1)  # Rotations,H,W
 
     def get_action(self, img) -> np.ndarray:
         """Get optimal determinstic action according to Q network
@@ -124,18 +122,22 @@ class SpatialQNetwork(nn.Module):
             # sample an action according to the heatmaps
             with torch.no_grad():
                 q_maps = self.forward(img).detach().cpu().numpy()
-                probability_map = np.copy(q_maps)
-                probability_map += temperature
-                probability_map /= np.sum(probability_map)
-                flattened_probabilities = probability_map.flatten()
-
-                sampled_flattened_index = np.random.choice(
-                    np.arange(len(flattened_probabilities)), p=flattened_probabilities
-                )
-                sampled_indices = np.unravel_index(sampled_flattened_index, probability_map.shape)
+                sampled_indices = self.sample_heatmaps(temperature, q_maps)
                 theta = self.rotations_in_radians[sampled_indices[0]]
                 action = np.array([sampled_indices[2], sampled_indices[1], theta])
         return action, q_maps
+
+    def sample_heatmaps(self, temperature, q_maps):
+        temperature = min(1e-15, temperature)  # avoid division by zeros.
+        assert len(q_maps.shape) == 3  # rotations,H,W
+        probability_map = np.copy(q_maps)
+        probability_map = np.clip(probability_map, 1e-15, 1.0)
+        probability_map += temperature
+        probability_map /= np.sum(probability_map)
+        flattened_probabilities = probability_map.flatten()
+        sampled_flattened_index = np.random.choice(np.arange(len(flattened_probabilities)), p=flattened_probabilities)
+        sampled_indices = np.unravel_index(sampled_flattened_index, probability_map.shape)
+        return sampled_indices
 
     def _pad_for_rotations(self, img: torch.Tensor) -> torch.Tensor:
         """
@@ -254,11 +256,11 @@ class SpatialActionDQN(nn.Module):
                     action = env.get_oracle_action()
 
                 next_obs, reward, done, _ = env.step(action)
-
                 if iteration % self.log_every_n_steps == 0:
-                    self.visualize_action(obs, action, "interaction")
-                    self.log({"interaction_next_obs": wandb.Image(next_obs[..., :3])}, step=iteration)
+                    self.visualize_action(obs, action, reward, "interaction")
                 self.log({"reward": reward}, step=iteration)
+                self.log({"reward/running_avg_200": np.mean(self.replay_buffer.rewards[-200:])}, step=iteration)
+                self.log({"reward/running_avg_500": np.mean(self.replay_buffer.rewards[-500:])}, step=iteration)
                 logger.info(f"experience: {action=}, {reward=},{done=}")
                 self.replay_buffer.add(obs, action, reward, next_obs, done)
                 obs = next_obs
@@ -266,27 +268,25 @@ class SpatialActionDQN(nn.Module):
                 loss = self.training_step(iteration)
                 self.log({"train_loss": loss}, step=iteration)
 
-    def visualize_action(self, obs, action, caption_prefix=""):
+    def visualize_action(self, obs, action, reward, caption_prefix=""):
         scale = 1 + obs.shape[0] // 64
         obs = obs[..., :3]
         obs = np.ascontiguousarray(obs)
         u, v = int(action[0]), int(action[1])
         theta = action[2]
-        vis = cv2.circle(obs, (u, v), scale, (0, 0, 0), -1)
+
+        color = (255 * (1 - reward), 255 * reward, 0)
+        vis = cv2.circle(obs, (u, v), scale, color, -1)
         grasp_orientation_vector = np.array([np.cos(theta), np.sin(theta)])
         line_start = np.array([u, v]) - grasp_orientation_vector * scale * 3
-        line_start = np.clip(0, obs.shape[0] - 1, line_start)
+        line_start = np.clip(line_start, 0, obs.shape[0] - 1)
         line_end = np.array([u, v]) + grasp_orientation_vector * scale * 3
-        line_end = np.clip(0, obs.shape[0] - 1, line_end)
+        line_end = np.clip(line_end, 0, obs.shape[0] - 1)
         vis = cv2.line(
             vis,
             line_start.astype(np.uint8),
             line_end.astype(np.uint8),
-            (
-                0,
-                0,
-                0,
-            ),
+            color,
             scale // 2,
         )
         self.log({f"{caption_prefix}_action": wandb.Image(vis)})
@@ -300,7 +300,7 @@ class SpatialActionDQN(nn.Module):
     def training_step(self, iteration):
         action_q_values = []
         td_q_values = []
-        for batch_index in range(self.batch_size):
+        for _ in range(self.batch_size):
             # get obs, action(u,v,theta), reward, next_obs
             obs, action, reward, next_obs, done = self.replay_buffer.sample(1)
             obs, action, reward, next_obs, done = obs[0], action[0], reward[0], next_obs[0], done[0]
@@ -320,7 +320,7 @@ class SpatialActionDQN(nn.Module):
             if self.discount_factor > 0.0:
                 # get the max(Q-value) (==value function of that state) of the target network on the next_obs
                 future_reward = torch.max(self.target_q_network(next_obs))
-                td_q_value = reward + self.discount_factor * future_reward
+                td_q_value = reward + self.discount_factor * future_reward * (1 - done)
             else:
                 td_q_value = reward
 
@@ -335,7 +335,9 @@ class SpatialActionDQN(nn.Module):
                         )
                     }
                 )
-            self.visualize_action(obs.detach().cpu().permute(1, 2, 0)[..., :3], action.cpu(), caption_prefix="train")
+            self.visualize_action(
+                obs.detach().cpu().permute(1, 2, 0)[..., :3], action.cpu(), reward.cpu().item(), caption_prefix="train"
+            )
 
         action_q_values = torch.stack(action_q_values)
         td_q_values = torch.stack(td_q_values)
@@ -364,8 +366,9 @@ def seed_all(x):
 
 
 if __name__ == "__main__":
+    seed_all(2022)
     network = SpatialQNetwork(2, device="cuda")
-    img = torch.randn(4, 256, 256).to("cuda")
-    print(img.device)
-    map = network(img)
-    print(map.shape)
+    img = torch.zeros(4, 4, 4)
+    img[2, 1, 3] = 1.0
+    action = network.sample_heatmaps(0.001, img)
+    print(action)
