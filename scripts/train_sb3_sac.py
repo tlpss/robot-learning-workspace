@@ -1,12 +1,14 @@
 import pathlib
 
 import gym
+import numpy as np
 import torch
 import torch.nn as nn
 import wandb
 from pybullet_sim.pick_env import UR3ePick
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from wandb.integration.sb3 import WandbCallback
 
@@ -40,9 +42,9 @@ class RGBDCnn(BaseFeaturesExtractor):
 
     def forward(self, x):
         # input is HxWxC but already scaled to 0-1 (for the image).
-        assert x.shape[2] == self.n_channels_in
-        x = x.permute(2, 0, 1)
-        return self.model(x)
+        assert x.shape[-1] == self.n_channels_in
+        x = x.permute(0, 3, 1, 2)
+        return self.cnn(x)
 
 
 if __name__ == "__main__":
@@ -51,17 +53,18 @@ if __name__ == "__main__":
     config = {
         "gamma": 0.9,
         "lr": 6e-4,
-        "learning_starts": 100,
+        "learning_starts": 150,
         "batch_size": 64,
         "time_steps": 20000,
         "seed": 2022,
-        "use_state_observations": True,
-        "use_push_primitive": False,
     }
 
     torch.manual_seed(config["seed"])
+    import pybullet as p
 
-    env = UR3ePick(use_spatial_action_map=False, use_motion_primitive=True, simulate_realtime=False)
+    env = UR3ePick(
+        use_spatial_action_map=False, use_motion_primitive=True, simulate_realtime=False, pybullet_mode=p.DIRECT
+    )
     env = VideoRecorderWrapper(env, folder_path / "videos")
     env.rescale_factor = 1
     policy_kwargs = dict(
@@ -86,6 +89,7 @@ if __name__ == "__main__":
         batch_size=config["batch_size"],
         device=device,
         tau=0.02,
+        action_noise=NormalActionNoise(np.array([0.0, 0.0, 0.0, 0.0]), np.array([0.05, 0.05, 0.02, 0.5])),
     )
 
     eval_callback = EvalCallback(env, n_eval_episodes=5, eval_freq=500)
