@@ -46,11 +46,13 @@ class VideoRecorderWrapper(Wrapper):
     def reset(self):
         self.episode_count += 1
 
+        reset_returns = self.env.reset()
+
         if self._should_capture_this_episode():
             self.frames = []
             self._capture_current_frame()
 
-        return self.env.reset()
+        return reset_returns
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
