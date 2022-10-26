@@ -259,8 +259,17 @@ class SpatialActionDQN(nn.Module):
                 if iteration % self.log_every_n_steps == 0:
                     self.visualize_action(obs, action, reward, "interaction")
                 self.log({"reward": reward}, step=iteration)
-                self.log({"reward/running_avg_200": np.mean(self.replay_buffer.rewards[-200:])}, step=iteration)
-                self.log({"reward/running_avg_500": np.mean(self.replay_buffer.rewards[-500:])}, step=iteration)
+                for window_size in [200, 500]:
+                    self.log(
+                        {
+                            f"reward/running_avg_{window_size}": np.mean(
+                                self.replay_buffer.rewards[
+                                    max(self.replay_buffer.idx - window_size, 0) : self.replay_buffer.idx
+                                ]
+                            )
+                        },
+                        step=iteration,
+                    )
                 logger.info(f"experience: {action=}, {reward=},{done=}")
                 self.replay_buffer.add(obs, action, reward, next_obs, done)
                 obs = next_obs
