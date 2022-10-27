@@ -18,6 +18,27 @@ import tqdm
 import wandb
 
 
+def convert_np_image_to_torch(x):
+    x = torch.tensor(x)
+    x = x.permute(2, 0, 1)
+    return x
+
+
+def evaluate_policy(spatial_action_dqn, env: UR3ePick, n_episodes):
+    rewards = []
+    for episode in range(n_episodes):
+        done = False
+        obs = env.reset()
+        while not done:
+            obs = convert_np_image_to_torch(obs)
+            action, _ = spatial_action_dqn.q_network.get_action(obs)
+            next_obs, reward, done, info = env.step(action)
+            obs = next_obs
+            rewards.append(reward)
+    average_accumulated_episode_reward = sum(rewards) / n_episodes
+    return average_accumulated_episode_reward
+
+
 class ReplayBuffer(object):
     """Buffer to store environment transitions. Taken from https://github.com/denisyarats/pytorch_sac_ae/blob/master/utils.py"""
 
@@ -190,6 +211,7 @@ class SpatialActionDQN(nn.Module):
         n_channels=64,
         batch_size: int = 3,
         n_demonstration_steps: int = 100,
+        evaluation_frequency: int = 250,
         lr: float = 3e-4,
         device="cpu",
         **kwargs,
@@ -202,6 +224,7 @@ class SpatialActionDQN(nn.Module):
 
         self.start_training_step = 51
         self.log_every_n_steps = 21
+        self.evaluation_frequency = evaluation_frequency
 
         self.n_bootstrap_steps = n_demonstration_steps
         self.criterion = torch.nn.L1Loss()
@@ -236,22 +259,14 @@ class SpatialActionDQN(nn.Module):
                 done = False
             self.log({"iteration": iteration}, step=iteration)
             with torch.no_grad():
-                torch_obs = self._np_image_to_torch(obs)
+                torch_obs = convert_np_image_to_torch(obs)
                 if iteration > self.n_bootstrap_steps:
                     action, q_maps = self.q_network.sample_action(
                         torch_obs, exploration_greedy_epsilon=0.1, temperature=self.action_sample_temperature
                     )
                     if iteration % self.log_every_n_steps == 0:
                         if q_maps is not None:
-                            for i in range(self.q_network.n_rotations):
-                                self.log(
-                                    {
-                                        f"interaction_spatial_action_map_{self.q_network.rotations_in_radians[i]:.2f}": wandb.Image(
-                                            q_maps[i]
-                                        )
-                                    },
-                                    step=iteration,
-                                )
+                            self.visualize_q_maps(iteration, obs[..., :3], q_maps, "interaction")
                 else:
                     action = env.get_oracle_action()
 
@@ -271,11 +286,29 @@ class SpatialActionDQN(nn.Module):
                         step=iteration,
                     )
                 logger.info(f"experience: {action=}, {reward=},{done=}")
-                self.replay_buffer.add(obs, action, reward, next_obs, done)
-                obs = next_obs
+
             if iteration > self.start_training_step:
                 loss = self.training_step(iteration)
                 self.log({"train_loss": loss}, step=iteration)
+
+            if iteration % self.evaluation_frequency == 0:
+                averaged_episode_reward = evaluate_policy(self, env, 2)
+                self.log({"evaluation/averaged_episode_reward": averaged_episode_reward}, step=iteration)
+                logger.info(f"evaluation average episode reward = {averaged_episode_reward}")
+            self.replay_buffer.add(obs, action, reward, next_obs, done)
+            obs = next_obs
+
+    def visualize_q_maps(self, iteration, obs: np.ndarray, q_maps: np.ndarray, prefix: str = ""):
+        for i in range(self.q_network.n_rotations):
+            # q_maps *=255
+            # q_maps = q_maps.astype(np.uint8)
+            # heatmap = cv2.applyColorMap(q_maps[i],cv2.COLORMAP_JET)
+            # heatmap = heatmap.astype(np.float32) / 255.0
+            img = q_maps[i]
+            self.log(
+                {f"{prefix}_spatial_action_map_{self.q_network.rotations_in_radians[i]:.2f}": wandb.Image(img)},
+                step=iteration,
+            )
 
     def visualize_action(self, obs, action, reward, caption_prefix=""):
         scale = 1 + obs.shape[0] // 64
@@ -299,12 +332,6 @@ class SpatialActionDQN(nn.Module):
             scale // 2,
         )
         self.log({f"{caption_prefix}_action": wandb.Image(vis)})
-
-    @staticmethod
-    def _np_image_to_torch(x):
-        x = torch.tensor(x)
-        x = x.permute(2, 0, 1)
-        return x
 
     def training_step(self, iteration):
         action_q_values = []
@@ -336,14 +363,9 @@ class SpatialActionDQN(nn.Module):
             td_q_values.append(td_q_value)
 
         if iteration % self.log_every_n_steps == 0:
-            for i in range(self.q_network.n_rotations):
-                self.log(
-                    {
-                        f"train_spatial_action_map_{self.q_network.rotations_in_radians[i]:.2f}": wandb.Image(
-                            q_values[i].detach().cpu()
-                        )
-                    }
-                )
+            self.visualize_q_maps(
+                iteration, obs.detach().cpu().permute(1, 2, 0)[..., :3], q_values.detach().cpu().numpy(), "train"
+            )
             self.visualize_action(
                 obs.detach().cpu().permute(1, 2, 0)[..., :3], action.cpu(), reward.cpu().item(), caption_prefix="train"
             )
