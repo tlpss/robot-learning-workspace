@@ -1,7 +1,10 @@
 import logging
+import pickle
 import random
+from pathlib import Path
 
 import cv2
+import imageio
 import numpy as np
 import torch
 import torch.nn as nn
@@ -229,6 +232,7 @@ class SpatialActionDQN(nn.Module):
         self.start_training_step = 11
         self.log_every_n_steps = 21
         self.evaluation_frequency = evaluation_frequency
+        self.n_training_steps_done = 0
 
         self.n_bootstrap_steps = n_demonstration_steps
         self.criterion = torch.nn.L1Loss()
@@ -255,27 +259,63 @@ class SpatialActionDQN(nn.Module):
 
         self.log = wandb.log
 
-    def train(self, env: UR3ePick, n_iterations: int):
+    def add_demonstrations_to_buffer(self, path: str, amount: int = 0):
+        path = Path(path)
+        demo_episode_list = sorted([x for x in path.glob("*") if not x.is_file()])
+        n_collected_demos = len(demo_episode_list)
+
+        n_demos_to_add = min(amount, n_collected_demos)
+        logger.info(f"adding {n_demos_to_add} demonstration episodes to the buffer")
+        for demo_path in tqdm.tqdm(demo_episode_list[:n_demos_to_add]):
+            with open(str(demo_path / "demonstration.pkl"), "rb") as file:
+                demonstration = pickle.load(file)
+            # assume rgb and depth visual observations
+            for index in range(len(demonstration.actions)):
+                action, reward, done = (
+                    demonstration.actions[index],
+                    demonstration.rewards[index],
+                    demonstration.dones[index],
+                )
+                rgb_obs = imageio.imread(demo_path / "rgb" / f"{index}.png")
+                depth_obs = imageio.imread(demo_path / "depth" / f"{index}.png")
+                rgb_next_obs = imageio.imread(demo_path / "rgb" / f"{index+1}.png")
+                depth_next_obs = imageio.imread(demo_path / "depth" / f"{index+1}.png")
+                obs = np.concatenate([rgb_obs, depth_obs[..., np.newaxis]], axis=-1)
+                next_obs = np.concatenate([rgb_next_obs, depth_next_obs[..., np.newaxis]], axis=-1)
+                self.replay_buffer.add(obs, action, reward, next_obs, done)
+
+        # collect n_demos
+        # for i in range(..)
+        # get path of nth demo
+        # unload the pickle.
+        # combine the observations into one.
+        # for each transition: get action, reward, done obs and next obs
+        # save the transition
+
+    def train_on_buffer(self, n_iterations: int):
+        """can be used for BC after adding the demonstrations to the buffer first."""
+        for _ in tqdm.trange(n_iterations):
+            self.n_training_steps_done += 1
+            loss = self.training_step(self.n_training_steps_done)
+            self.log({"train_loss": loss}, step=self.n_training_steps_done)
+
+    def collect_and_train(self, env: UR3ePick, n_iterations: int):
         done = True
-        for iteration in tqdm.trange(n_iterations):
+        for _ in tqdm.trange(n_iterations):
+            self.n_training_steps_done += 1
+            iteration = self.n_training_steps_done
             if done:
                 obs = env.reset()
                 done = False
             self.log({"iteration": iteration}, step=iteration)
             with torch.no_grad():
                 torch_obs = convert_np_image_to_torch(obs)
-                if iteration > self.n_bootstrap_steps:
-                    action, q_maps = self.q_network.sample_action(
-                        torch_obs, exploration_greedy_epsilon=0.1, temperature=self.action_sample_temperature
-                    )
-                    if iteration % self.log_every_n_steps == 0:
-                        if q_maps is not None:
-                            self.visualize_q_maps(
-                                iteration, obs[..., :3], q_maps.detach().cpu().numpy(), "interaction"
-                            )
-                else:
-                    action = env.get_oracle_action()
-
+                action, q_maps = self.q_network.sample_action(
+                    torch_obs, exploration_greedy_epsilon=0.1, temperature=self.action_sample_temperature
+                )
+                if iteration % self.log_every_n_steps == 0:
+                    if q_maps is not None:
+                        self.visualize_q_maps(iteration, obs[..., :3], q_maps.detach().cpu().numpy(), "interaction")
                 next_obs, reward, done, _ = env.step(action)
                 if iteration % self.log_every_n_steps == 0:
                     self.visualize_action(obs, action, reward, "interaction")
@@ -298,7 +338,7 @@ class SpatialActionDQN(nn.Module):
                 self.log({"train_loss": loss}, step=iteration)
 
             if iteration % self.evaluation_frequency == 0:
-                averaged_episode_reward = evaluate_policy(self, env, 2)
+                averaged_episode_reward = evaluate_policy(self, env, 10)
                 self.log({"evaluation/averaged_episode_reward": averaged_episode_reward}, step=iteration)
                 logger.info(f"evaluation average episode reward = {averaged_episode_reward}")
             self.replay_buffer.add(obs, action, reward, next_obs, done)
@@ -307,10 +347,13 @@ class SpatialActionDQN(nn.Module):
     def visualize_q_maps(self, iteration, obs: np.ndarray, q_maps: np.ndarray, prefix: str = ""):
         assert isinstance(obs, np.ndarray)
         assert isinstance(q_maps, np.ndarray)
-        q_maps *= 255
-        q_maps = q_maps.astype(np.uint8)
+        heatmaps = np.copy(q_maps)
+        heatmaps = np.clip(heatmaps, 1e-15, 1.0)
+        heatmaps *= 255
+        heatmaps = heatmaps.astype(np.uint8)
         for i in range(self.q_network.n_rotations):
-            heatmap = cv2.applyColorMap(q_maps[i], cv2.COLORMAP_JET)
+            heatmap = cv2.applyColorMap(heatmaps[i], cv2.COLORMAP_JET)
+            heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
             heatmap = heatmap.astype(np.float32) / 255.0
             heatmap[heatmap < 0.5] = 0
             blend = 0.5
