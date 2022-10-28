@@ -123,7 +123,8 @@ class SpatialQNetwork(nn.Module):
             ActionType: _description_
         """
         with torch.no_grad():
-            q_maps = self.forward(img).detach().cpu().numpy()
+            q_maps = self.forward(img)
+            q_maps = q_maps.detach().cpu().numpy()
         indices = np.unravel_index(np.argmax(q_maps), q_maps.shape)
         theta = self.rotations_in_radians[indices[0]]
         return np.array([indices[2], indices[1], theta]), q_maps
@@ -142,13 +143,16 @@ class SpatialQNetwork(nn.Module):
         else:
             # sample an action according to the heatmaps
             with torch.no_grad():
-                q_maps = self.forward(img).detach().cpu().numpy()
-                sampled_indices = self.sample_heatmaps(temperature, q_maps)
+                q_maps = self.forward(img)
+                q_maps = q_maps.detach()
+                sampled_indices = self.sample_heatmaps(temperature, q_maps.cpu())
                 theta = self.rotations_in_radians[sampled_indices[0]]
                 action = np.array([sampled_indices[2], sampled_indices[1], theta])
         return action, q_maps
 
     def sample_heatmaps(self, temperature, q_maps):
+        assert q_maps.device.type == "cpu"
+        assert len(q_maps.shape) == 3
         temperature = min(1e-15, temperature)  # avoid division by zeros.
         assert len(q_maps.shape) == 3  # rotations,H,W
         probability_map = np.copy(q_maps)
@@ -222,7 +226,7 @@ class SpatialActionDQN(nn.Module):
 
         self.discount_factor = discount_factor
 
-        self.start_training_step = 51
+        self.start_training_step = 11
         self.log_every_n_steps = 21
         self.evaluation_frequency = evaluation_frequency
 
@@ -266,7 +270,9 @@ class SpatialActionDQN(nn.Module):
                     )
                     if iteration % self.log_every_n_steps == 0:
                         if q_maps is not None:
-                            self.visualize_q_maps(iteration, obs[..., :3], q_maps, "interaction")
+                            self.visualize_q_maps(
+                                iteration, obs[..., :3], q_maps.detach().cpu().numpy(), "interaction"
+                            )
                 else:
                     action = env.get_oracle_action()
 
@@ -299,14 +305,30 @@ class SpatialActionDQN(nn.Module):
             obs = next_obs
 
     def visualize_q_maps(self, iteration, obs: np.ndarray, q_maps: np.ndarray, prefix: str = ""):
+        assert isinstance(obs, np.ndarray)
+        assert isinstance(q_maps, np.ndarray)
+        q_maps *= 255
+        q_maps = q_maps.astype(np.uint8)
         for i in range(self.q_network.n_rotations):
-            # q_maps *=255
-            # q_maps = q_maps.astype(np.uint8)
-            # heatmap = cv2.applyColorMap(q_maps[i],cv2.COLORMAP_JET)
-            # heatmap = heatmap.astype(np.float32) / 255.0
-            img = q_maps[i]
+            heatmap = cv2.applyColorMap(q_maps[i], cv2.COLORMAP_JET)
+            heatmap = heatmap.astype(np.float32) / 255.0
+            heatmap[heatmap < 0.5] = 0
+            blend = 0.5
+            img = obs * blend + heatmap * (1 - blend)
             self.log(
-                {f"{prefix}_spatial_action_map_{self.q_network.rotations_in_radians[i]:.2f}": wandb.Image(img)},
+                {
+                    f"{prefix}_overlayed_spatial_action_map_{self.q_network.rotations_in_radians[i]:.2f}": wandb.Image(
+                        img
+                    )
+                },
+                step=iteration,
+            )
+            self.log(
+                {
+                    f"{prefix}_raw_spatial_action_map_{self.q_network.rotations_in_radians[i]:.2f}": wandb.Image(
+                        q_maps[i]
+                    )
+                },
                 step=iteration,
             )
 
@@ -336,10 +358,16 @@ class SpatialActionDQN(nn.Module):
     def training_step(self, iteration):
         action_q_values = []
         td_q_values = []
-        for _ in range(self.batch_size):
+        obs_batch, action_batch, reward_batch, next_obs_batch, done_batch = self.replay_buffer.sample(self.batch_size)
+        for i in range(self.batch_size):
             # get obs, action(u,v,theta), reward, next_obs
-            obs, action, reward, next_obs, done = self.replay_buffer.sample(1)
-            obs, action, reward, next_obs, done = obs[0], action[0], reward[0], next_obs[0], done[0]
+            obs, action, reward, next_obs, done = (
+                obs_batch[i],
+                action_batch[i],
+                reward_batch[i],
+                next_obs_batch[i],
+                done_batch[i],
+            )
             obs, next_obs = obs.permute(2, 0, 1), next_obs.permute(2, 0, 1)
 
             # compute the Q-values
@@ -364,7 +392,10 @@ class SpatialActionDQN(nn.Module):
 
         if iteration % self.log_every_n_steps == 0:
             self.visualize_q_maps(
-                iteration, obs.detach().cpu().permute(1, 2, 0)[..., :3], q_values.detach().cpu().numpy(), "train"
+                iteration,
+                obs.detach().cpu().permute(1, 2, 0)[..., :3].numpy(),
+                q_values.detach().cpu().numpy(),
+                "train",
             )
             self.visualize_action(
                 obs.detach().cpu().permute(1, 2, 0)[..., :3], action.cpu(), reward.cpu().item(), caption_prefix="train"
